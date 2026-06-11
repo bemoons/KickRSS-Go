@@ -1,0 +1,17 @@
+name: myrss-go
+version: '3.8'
+
+services:
+  myrss:
+    build:
+      context: .
+    image: myrss-go:latest
+    container_name: myrss-go
+    restart: unless-stopped
+    network_mode: "host"
+    volumes:
+      # Mount data folder for configuration config.yaml and database myrss.db
+      - ./data:/app/data
+    environment:
+      - PORT=9999
+      - TZ=Asia/Shanghai

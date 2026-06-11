@@ -1,0 +1,14 @@
+# Compiled binaries
+kickrss
+kickrss.exe
+release_package/
+
+# Local databases and runtime data
+myrss.db
+myrss.db-shm
+myrss.db-wal
+data/
+
+# Logs
+*.log
+stack.log
