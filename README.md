@@ -1,0 +1,1 @@
+KickRSS Go-lang version
