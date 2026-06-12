@@ -1130,21 +1130,24 @@ func getInterestProfile(c *gin.Context) {
 		topics = gin.H{"high_interest": []string{}, "low_interest": []string{}, "concentration_note": nil}
 	}
 
-	// Get activity timestamps (last 30 days)
-	activityRows, err := db.DB.Query(`
-		SELECT recorded_at 
-		FROM engagement 
-		WHERE recorded_at IS NOT NULL AND datetime(recorded_at) >= datetime('now', '-30 days')
-	`)
-	activityTimestamps := []string{}
-	if err == nil {
-		defer activityRows.Close()
-		for activityRows.Next() {
-			var ts string
-			if err := activityRows.Scan(&ts); err == nil {
-				activityTimestamps = append(activityTimestamps, ts)
-			}
+	// Get token stats for the last 7 calendar days
+	type TokenStat struct {
+		Date        string `json:"date"`
+		TotalTokens int    `json:"total_tokens"`
+	}
+	tokenStats := []TokenStat{}
+	nowTime := time.Now().Local()
+	for i := 6; i >= 0; i-- {
+		d := nowTime.AddDate(0, 0, -i).Format("2006-01-02")
+		var totalTokens int
+		err := db.DB.QueryRow("SELECT total_tokens FROM token_usage WHERE date = ?", d).Scan(&totalTokens)
+		if err != nil {
+			totalTokens = 0
 		}
+		tokenStats = append(tokenStats, TokenStat{
+			Date:        d,
+			TotalTokens: totalTokens,
+		})
 	}
 
 	// Get category distribution
@@ -1179,7 +1182,7 @@ func getInterestProfile(c *gin.Context) {
 		"low_engagement":        latest.LowEngagement,
 		"topics":                topics,
 		"attention_guide":       latest.PromptText,
-		"activity_timestamps":   activityTimestamps,
+		"token_stats":           tokenStats,
 		"category_distribution": categoryDistribution,
 	})
 }

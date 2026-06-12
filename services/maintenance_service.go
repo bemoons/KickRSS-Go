@@ -208,6 +208,7 @@ func BuildUserInterestProfile() error {
 		JOIN engagement g ON g.entry_id = e.id
 		JOIN feeds f ON f.id = e.feed_id
 		WHERE e.fetched_at > datetime('now', '-30 days')
+		  AND g.opened = 1
 	`
 	rows, err := db.DB.Query(query)
 	if err != nil {
@@ -255,6 +256,58 @@ func BuildUserInterestProfile() error {
 	snapshot, err := AggregateUserInterestsSnapshot(engagementList)
 	if err != nil {
 		return err
+	}
+
+	// Post-processing: match entries back to topics
+	processTopicItem := func(topicItem map[string]interface{}) {
+		topicName, _ := topicItem["topic"].(string)
+		var matchedIDs []int
+
+		// Split topic name into keywords (runes of length >= 2) for fuzzy lookup
+		runes := []rune(topicName)
+		var keywords []string
+		for i := 0; i < len(runes)-1; i++ {
+			kw := string(runes[i : i+2])
+			if len(strings.TrimSpace(kw)) >= 2 {
+				keywords = append(keywords, kw)
+			}
+		}
+		if len(keywords) == 0 && len(topicName) > 0 {
+			keywords = append(keywords, topicName)
+		}
+
+		for _, eng := range engagementList {
+			title, _ := eng["title"].(string)
+			feed, _ := eng["feed_name"].(string)
+			entryID, _ := eng["entry_id"].(int)
+
+			matches := false
+			for _, kw := range keywords {
+				if strings.Contains(title, kw) || strings.Contains(feed, kw) {
+					matches = true
+					break
+				}
+			}
+			if matches {
+				matchedIDs = append(matchedIDs, entryID)
+			}
+		}
+
+		// Limit to top 20 entries
+		if len(matchedIDs) > 20 {
+			matchedIDs = matchedIDs[:20]
+		}
+		if matchedIDs == nil {
+			matchedIDs = []int{}
+		}
+		topicItem["entry_ids"] = matchedIDs
+	}
+
+	for _, item := range snapshot.HighInterest {
+		processTopicItem(item)
+	}
+	for _, item := range snapshot.LowInterest {
+		processTopicItem(item)
 	}
 
 	now := time.Now().UTC().Format(time.RFC3339)

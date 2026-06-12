@@ -10,6 +10,7 @@ import (
 	"log"
 	"net/http"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -470,13 +471,123 @@ type UserInterestSnapshot struct {
 	ConcentrationNote *string                  `json:"concentration_note"`
 }
 
+type scoredEngagement struct {
+	score float64
+	row   map[string]interface{}
+}
+
+func engagementScore(row map[string]interface{}) float64 {
+	score := 0.0
+
+	if bump, ok := row["manual_bump"].(string); ok {
+		if bump == "read" {
+			score += 5.0
+		} else if bump == "glance" {
+			score -= 3.0
+		}
+	}
+
+	if fav, ok := row["favorited"].(int); ok && fav > 0 {
+		score += 4.0
+	}
+	if openOrig, ok := row["opened_original"].(int); ok && openOrig > 0 {
+		score += 3.0
+	}
+	if scrollBot, ok := row["scrolled_to_bottom"].(int); ok && scrollBot > 0 {
+		score += 2.0
+	}
+
+	if dwell, ok := row["active_dwell_ms"].(int); ok {
+		dwellMin := float64(dwell) / 60000.0
+		if dwellMin > 2.0 {
+			dwellMin = 2.0
+		}
+		score += dwellMin
+	}
+
+	if scrollPct, ok := row["scrolled_pct"].(float64); ok {
+		score += scrollPct * 1.5
+	} else if scrollPctInt, ok := row["scrolled_pct"].(int); ok {
+		score += float64(scrollPctInt) * 1.5
+	}
+
+	return score
+}
+
 func AggregateUserInterestsSnapshot(engagementList []map[string]interface{}) (*UserInterestSnapshot, error) {
 	if len(engagementList) == 0 {
 		return nil, errors.New("engagement data list is empty")
 	}
 
-	prompt := `你是一个用户阅读行为分析助手。以下是某用户近30天的RSS阅读记录。
+	scored := make([]scoredEngagement, len(engagementList))
+	for i, r := range engagementList {
+		scored[i] = scoredEngagement{
+			score: engagementScore(r),
+			row:   r,
+		}
+	}
 
+	sort.Slice(scored, func(i, j int) bool {
+		return scored[i].score > scored[j].score
+	})
+
+	var high []map[string]interface{}
+	var low []map[string]interface{}
+	for _, se := range scored {
+		if se.score >= 4.0 {
+			high = append(high, se.row)
+		} else if se.score <= 0.0 {
+			low = append(low, se.row)
+		}
+	}
+
+	highLimit := 80
+	if len(high) < highLimit {
+		highLimit = len(high)
+	}
+	lowLimit := 80
+	if len(low) < lowLimit {
+		lowLimit = len(low)
+	}
+
+	var highTitles []string
+	for _, r := range high[:highLimit] {
+		feedName, _ := r["feed_name"].(string)
+		title, _ := r["title"].(string)
+		highTitles = append(highTitles, fmt.Sprintf("[%s] %s", feedName, title))
+	}
+
+	var lowTitles []string
+	for _, r := range low[:lowLimit] {
+		feedName, _ := r["feed_name"].(string)
+		title, _ := r["title"].(string)
+		lowTitles = append(lowTitles, fmt.Sprintf("[%s] %s", feedName, title))
+	}
+
+	highText := "（数据不足）"
+	if len(highTitles) > 0 {
+		var buf bytes.Buffer
+		for _, t := range highTitles {
+			buf.WriteString("- " + t + "\n")
+		}
+		highText = buf.String()
+	}
+
+	lowText := "（数据不足）"
+	if len(lowTitles) > 0 {
+		var buf bytes.Buffer
+		for _, t := range lowTitles {
+			buf.WriteString("- " + t + "\n")
+		}
+		lowText = buf.String()
+	}
+
+	prompt := fmt.Sprintf(`你是一个用户阅读行为分析助手。以下是某用户近30天的RSS阅读记录。
+
+## 用户高度关注的文章（长时间阅读、滚动到底、收藏、查看原文、手动提升注意力）
+%s
+## 用户较少关注的文章（快速跳过、很少互动）
+%s
 请分析并输出以下 JSON（不要输出其他内容）：
 {
   "high_interest": [
@@ -487,12 +598,18 @@ func AggregateUserInterestsSnapshot(engagementList []map[string]interface{}) (*U
   ],
   "attention_guide": "一段自然语言，50-120字，概括用户的整体阅读倾向，供分类器参考。格式示例：'用户高度关注XX and XX方向，尤其是涉及XX的内容应标为read；对XX and XX类内容兴趣较低，可标为glance。'",
   "concentration_note": "如果 high_interest 中超过半数主题属于同一领域，输出一句带黑色幽默、毒舌、戏谑又一针见血的调侃，无情揭露用户偏科的信息茧房（30-60字），语气要傲娇或犀利，否则设为 null"
-}`
+}
 
-	engagementBytes, _ := json.Marshal(engagementList)
+要求：
+- high_interest 提取 3-8 个主题，按关注强度从高到低排列
+- low_interest 提取 2-5 个主题
+- 主题应跨订阅源归纳，不要按订阅源罗列
+- 如果某类文章高参与和低参与中都有，说明用户对该主题的子方向有选择性，请在 description 中体现
+- attention_guide 必须具体到可操作，不要说"用户关注科技"这种空话`, highText, lowText)
+
 	messages := []ChatMessage{
-		{Role: "system", Content: prompt},
-		{Role: "user", Content: string(engagementBytes)},
+		{Role: "system", Content: "You are a helpful reading behavior analyst."},
+		{Role: "user", Content: prompt},
 	}
 
 	content, err := CallChatCompletion(messages, "profile", true)
