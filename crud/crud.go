@@ -1013,7 +1013,8 @@ func GetTopicDetail(topicName string) (*TopicDetail, error) {
 	favoriteCount := 0
 	originalCount := 0
 	weeklyTrend := make([]int, 12)
-	today := time.Now()
+	now := time.Now()
+	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
 
 	for rows.Next() {
 		var entryID int
@@ -1049,11 +1050,12 @@ func GetTopicDetail(topicName string) (*TopicDetail, error) {
 			pubDate, err := time.Parse("2006-01-02", pubDateStr)
 			if err == nil {
 				dayDiff := int(today.Sub(pubDate).Hours() / 24)
-				if dayDiff >= 0 {
-					weekIndex := 11 - (dayDiff / 7)
-					if weekIndex >= 0 && weekIndex < 12 {
-						weeklyTrend[weekIndex]++
-					}
+				if dayDiff < 0 {
+					dayDiff = 0
+				}
+				weekIndex := 11 - (dayDiff / 7)
+				if weekIndex >= 0 && weekIndex < 12 {
+					weeklyTrend[weekIndex]++
 				}
 			}
 		}
