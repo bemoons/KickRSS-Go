@@ -739,29 +739,7 @@ func getEntrySummary(c *gin.Context) {
 			aiStreamEnabled := config.GlobalConfig.AI.Stream
 
 			if aiStreamEnabled {
-				targetLang := config.GlobalConfig.AI.SummaryLanguage
-				if targetLang == "auto" || targetLang == "" {
-					targetLang = config.GlobalConfig.SystemLanguage
-				}
-				if targetLang == "" {
-					targetLang = "zh"
-				}
-				engName, localName, chnName := services.GetLanguageNames(targetLang)
-
-				// Construct prompt
-				prompt := fmt.Sprintf(`请为以下文章生成摘要。要求：
-1. 必须使用 %s (%s) 以无序列表（Markdown Bullet Points，以 "- " 开头）的形式输出 3 到 5 条核心要点。
-2. 语言需简明扼要，直达核心。
-3. 突出重点：选择性地将最重要的结论、核心词句或关键数据加粗（使用 **加粗文本**），让读者能一眼扫视出文章的精髓，但注意不要过度加粗。
-4. 动态控制摘要总字数在 %d 字以内。
-5. 【重要】如果文章标题存在夸大其词、标题党、或者标题结论与正文事实严重不符的情况，请在摘要的最后添加一行以 "【标题警告】" 开头的提示（提示内容使用 %s (%s)，但前缀固定为 "【标题警告】"），指出标题中与事实不符或夸大的点。若无此情况，则绝对不写任何标题警告内容。
-6. 【重要】必须使用 %s (%s) 撰写上述摘要，绝对不要使用原文语言。`, chnName, localName, targetChars, chnName, localName, engName, localName)
-
-				messages := []services.ChatMessage{
-					{Role: "system", Content: prompt},
-					{Role: "user", Content: fmt.Sprintf("文章标题: %s\n文章链接: %s\n文章正文内容: %s", entry.Title, entry.URL, ftText)},
-				}
-
+				messages := services.GetSummaryMessages(entry.Title, entry.URL, ftText, targetChars, config.GlobalConfig.AI.SummaryLanguage)
 				respStream, err := services.CallChatCompletionStream(messages, "summary")
 				if err != nil {
 					payload, _ := json.Marshal(gin.H{"summary": "", "clickbait_note": nil, "status": "error", "detail": err.Error()})
@@ -772,11 +750,66 @@ func getEntrySummary(c *gin.Context) {
 				defer respStream.Body.Close()
 
 				summaryFull := ""
+				inSummary := false
+				var clickbaitNote *string = nil
+				buffer := ""
+
 				errRead := services.ReadSSEResponse(respStream, func(chunk string) error {
 					summaryFull += chunk
-					payload, _ := json.Marshal(gin.H{"summary": chunk, "clickbait_note": nil, "status": "streaming"})
-					fmt.Fprintf(w, "data: %s\n\n", string(payload))
-					c.Writer.Flush()
+
+					if !inSummary {
+						buffer += chunk
+						if strings.Contains(buffer, "SUMMARY:") {
+							parts := strings.SplitN(buffer, "SUMMARY:", 2)
+							beforeSum := strings.TrimSpace(parts[0])
+							afterSum := strings.TrimLeft(parts[1], " \t\r\n")
+
+							if strings.HasPrefix(beforeSum, "CLICKBAIT_NOTE:") {
+								noteVal := strings.TrimPrefix(beforeSum, "CLICKBAIT_NOTE:")
+								noteVal = strings.TrimSpace(noteVal)
+								if strings.ToUpper(noteVal) != "NONE" && noteVal != "" {
+									clickbaitNote = &noteVal
+									payload, _ := json.Marshal(gin.H{"summary": "", "clickbait_note": noteVal, "status": "streaming"})
+									fmt.Fprintf(w, "data: %s\n\n", string(payload))
+									c.Writer.Flush()
+								}
+							}
+
+							inSummary = true
+							if afterSum != "" {
+								payload, _ := json.Marshal(gin.H{"summary": afterSum, "clickbait_note": nil, "status": "streaming"})
+								fmt.Fprintf(w, "data: %s\n\n", string(payload))
+								c.Writer.Flush()
+							}
+							buffer = ""
+						} else if strings.Contains(buffer, "\n") {
+							parts := strings.SplitN(buffer, "\n", 2)
+							firstLine := strings.TrimSpace(parts[0])
+							rest := parts[1]
+
+							if strings.HasPrefix(firstLine, "CLICKBAIT_NOTE:") {
+								noteVal := strings.TrimPrefix(firstLine, "CLICKBAIT_NOTE:")
+								noteVal = strings.TrimSpace(noteVal)
+								if strings.ToUpper(noteVal) != "NONE" && noteVal != "" {
+									clickbaitNote = &noteVal
+									payload, _ := json.Marshal(gin.H{"summary": "", "clickbait_note": noteVal, "status": "streaming"})
+									fmt.Fprintf(w, "data: %s\n\n", string(payload))
+									c.Writer.Flush()
+								}
+							}
+							buffer = rest
+						} else if len(buffer) >= 250 {
+							inSummary = true
+							payload, _ := json.Marshal(gin.H{"summary": buffer, "clickbait_note": nil, "status": "streaming"})
+							fmt.Fprintf(w, "data: %s\n\n", string(payload))
+							c.Writer.Flush()
+							buffer = ""
+						}
+					} else {
+						payload, _ := json.Marshal(gin.H{"summary": chunk, "clickbait_note": nil, "status": "streaming"})
+						fmt.Fprintf(w, "data: %s\n\n", string(payload))
+						c.Writer.Flush()
+					}
 					return nil
 				})
 
@@ -787,13 +820,33 @@ func getEntrySummary(c *gin.Context) {
 					return false
 				}
 
-				// Parse response to save to DB
+				if buffer != "" {
+					if !inSummary {
+						sumText, click := services.ParseAISummaryResponse(buffer)
+						if click != "" {
+							clickbaitNote = &click
+							payload, _ := json.Marshal(gin.H{"summary": "", "clickbait_note": click, "status": "streaming"})
+							fmt.Fprintf(w, "data: %s\n\n", string(payload))
+							c.Writer.Flush()
+						}
+						if sumText != "" {
+							payload, _ := json.Marshal(gin.H{"summary": sumText, "clickbait_note": nil, "status": "streaming"})
+							fmt.Fprintf(w, "data: %s\n\n", string(payload))
+							c.Writer.Flush()
+						}
+					} else {
+						payload, _ := json.Marshal(gin.H{"summary": buffer, "clickbait_note": nil, "status": "streaming"})
+						fmt.Fprintf(w, "data: %s\n\n", string(payload))
+						c.Writer.Flush()
+					}
+				}
+
+				// Parse final response to save to DB
 				summaryText, clickbait := services.ParseAISummaryResponse(summaryFull)
 				model := config.GlobalConfig.AI.Default.Model
 				_ = crud.SaveSummary(entryID, summaryText, clickbait, model)
 
-				if clickbait != "" {
-					// Resend parsed warning
+				if clickbait != "" && clickbaitNote == nil {
 					payload, _ := json.Marshal(gin.H{"summary": "", "clickbait_note": clickbait, "status": "streaming"})
 					fmt.Fprintf(w, "data: %s\n\n", string(payload))
 					c.Writer.Flush()

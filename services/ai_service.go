@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -330,48 +331,163 @@ func ClassifyEntriesBatch(allowedCategories []string, entries []map[string]inter
 	return respObj.Results, nil
 }
 
+func GetSummaryMessages(title, url, content string, length interface{}, summaryLang string) []ChatMessage {
+	var lengthStr string
+	switch v := length.(type) {
+	case int:
+		lengthStr = strconv.Itoa(v)
+	case string:
+		lengthStr = v
+	default:
+		lengthStr = ""
+	}
+	if lengthStr == "" {
+		lengthStr = config.GlobalConfig.AI.SummaryLength
+	}
+	if summaryLang == "" {
+		summaryLang = config.GlobalConfig.AI.SummaryLanguage
+	}
+	if summaryLang == "auto" || summaryLang == "" {
+		summaryLang = config.GlobalConfig.SystemLanguage
+	}
+	if summaryLang == "" {
+		summaryLang = "zh"
+	}
+
+	targetChars := 0
+	isNumericLength := false
+	if val, err := strconv.Atoi(lengthStr); err == nil {
+		targetChars = val
+		isNumericLength = true
+	}
+
+	var lengthDesc string
+	var ruleDesc string
+	var structureAdvice string
+	var cnStructureAdvice string
+
+	if isNumericLength {
+		lengthDesc = fmt.Sprintf("proportional summary targeting approximately %d Chinese characters (around 1/10 of the clean text length)", targetChars)
+
+		if targetChars >= 600 {
+			structureAdvice = fmt.Sprintf("- For this length (%d characters), write a highly detailed, multi-paragraph, and structured summary. Break down the content into sections such as: Background/Context, Core Arguments/Key Points (explained with detail and evidence), Key Data/Findings, and Implications/Conclusions. Include specific examples, names, and numbers from the text to ensure depth and meet the length requirement.", targetChars)
+			cnStructureAdvice = fmt.Sprintf("针对当前较长的目标字数（大约 %d 字），你必须撰写一份结构清晰、内容饱满的深度长摘要。部分观点需要展开论述，请分成多个段落进行详细论述，包含：背景与前言、核心观点与详细论据展开、关键数据或案例细节、总结与影响。请多写细节、逻辑展开，严禁三言两语草草了事，以确保字数足够饱满。", targetChars)
+		} else if targetChars >= 300 {
+			structureAdvice = fmt.Sprintf("- For this length (%d characters), write a detailed summary containing 2-3 structured paragraphs or 5-8 detailed bullet points. Ensure core takeaways and their supporting points are fully explained.", targetChars)
+			cnStructureAdvice = fmt.Sprintf("针对当前中等目标字数（大约 %d 字），请撰写 2-3 个结构完整的段落，或者 5-8 个含有详细解释的要点。确保把核心事实、论据 and 结论表述清楚。", targetChars)
+		} else {
+			structureAdvice = fmt.Sprintf("- For this length (%d characters), write a concise summary containing 1-2 paragraphs or 3-5 bullet points.", targetChars)
+			cnStructureAdvice = fmt.Sprintf("针对当前简短的目标字数（大约 %d 字），请撰写 1-2 个精炼的段落，或者 3-5 个核心要点。", targetChars)
+		}
+
+		ruleDesc = fmt.Sprintf("The summary should be high-quality, cover key takeaways, and strictly target approximately %d Chinese characters.\n"+
+			"- CRITICAL: The generated summary MUST contain around %d Chinese characters. DO NOT make it too short. The target length is strictly %d characters.\n"+
+			"- %s", targetChars, targetChars, targetChars, structureAdvice)
+	} else if lengthStr == "short" {
+		lengthDesc = "short and concise summary (typically 3 bullet points or 1 paragraph, around 150-200 characters for the summary)"
+		ruleDesc = "The summary should be very brief and focus only on the most important takeaway."
+	} else if lengthStr == "long" {
+		lengthDesc = "long, detailed and comprehensive summary (typically 6-8 bullet points or 3-4 structured paragraphs, around 600-800 characters for the summary)"
+		ruleDesc = "The summary should cover background context, core points/arguments, key facts/data, and final conclusions in detail."
+	} else { // medium
+		lengthDesc = "comprehensive and informative summary (typically 4-6 bullet points or 2 structured paragraphs, around 300-400 characters for the summary)"
+		ruleDesc = "The summary should cover background context, core points/arguments, key facts/data, and final conclusions."
+	}
+
+	engName, localName, chnName := GetLanguageNames(summaryLang)
+
+	var langRule string
+	var reminder string
+
+	if summaryLang != "" {
+		langRule = fmt.Sprintf("CRITICAL: The summary must be written in %s (%s) ONLY, regardless of the original language of the article.\n"+
+			"- If the article is in Chinese or English, you MUST translate the key concepts and write the summary in %s (%s).\n"+
+			"- 必须且只能使用 %s (%s) 撰写 SUMMARY 部分，绝对不要使用原文语言（如中文或英文）来写摘要。", engName, localName, engName, localName, chnName, localName)
+
+		if isNumericLength {
+			langRule += fmt.Sprintf("\n- 必须写满大约 %d 个%s（汉字）（字数范围必须严格控制在 %d 到 %d 字之间）。\n"+
+				"- 这是字数的硬性指令，请把观点铺开、细节写饱满，绝对不能偷懒缩短！\n"+
+				"- 编写要求：%s", targetChars, chnName, int(float64(targetChars)*0.9), int(float64(targetChars)*1.15), cnStructureAdvice)
+		}
+		reminder = fmt.Sprintf("\n\nReminder: You MUST write the SUMMARY in %s (%s). (提示：请务必且只能使用 %s / %s 撰写摘要。)", engName, localName, chnName, localName)
+	} else {
+		langRule = "The summary must be in the same language as the article content."
+		if isNumericLength {
+			langRule += fmt.Sprintf("\n- CRITICAL: The generated summary MUST target approximately %d characters. DO NOT make it too short.\n- Requirements: %s", targetChars, structureAdvice)
+		}
+		reminder = ""
+	}
+
+	systemPrompt := fmt.Sprintf("You are an expert RSS assistant. You are given the title, URL, and full-text content of an article.\n"+
+		"Your task is to:\n"+
+		"1. Verify if the title is misleading or clickbait compared to the actual content.\n"+
+		"2. Generate a %s.\n\n"+
+		"Rules:\n"+
+		"- %s\n"+
+		"- If the content is empty or contains no text, reply exactly with: \"NO_CONTENT\"\n"+
+		"- %s\n"+
+		"- Formatting Guidelines (Extremely Important):\n"+
+		"  - Use markdown formatting to make the summary highly readable.\n"+
+		"  - Structure the summary primarily as a detailed bullet list starting with '-' (e.g., `- **Point Name**: Explanation`). Each bullet point should be highly informative, specific, and detailed.\n"+
+		"  - You may introduce the summary with a very brief opening paragraph (1-2 sentences), but the core of the summary must be structured as detailed list items rather than plain paragraphs.\n"+
+		"  - Selectively use double asterisks (`**text**`) to bold key conclusions, core arguments, or sentences that need focus to make the summary scannable.\n"+
+		"- 格式与排版规范（极重要）：\n"+
+		"  - 必须使用 Markdown 格式排版，确保摘要易读、易扫视。\n"+
+		"  - 主要排版结构：必须以条目（无序列表 `- `）为核心排版结构，避免使用大段的文字叙述。每一个条目（例如：`- **核心要点**：详细细节与事实展开`）必须内容扎实、数据细节饱满，并合理换行展开。\n"+
+		"  - 可以在最开头有一句非常简短的导语（1-2句），但整个摘要的主体必须是详细具体的条目列表。\n"+
+		"  - 突出重点：选择性地将最重要的结论、核心词句或关键数据加粗（使用 `**加粗文本**`），让读者能一眼扫视出文章的精髓，但注意不要过度加粗。\n"+
+		"- Format your response EXACTLY like this (do NOT translate the prefix keys 'CLICKBAIT_NOTE:' and 'SUMMARY:'):\n"+
+		"CLICKBAIT_NOTE: <If the title is misleading, state the exact reason and clear up the discrepancy in 1 sentence. If NOT misleading, write NONE>\n"+
+		"SUMMARY: <write the detailed summary here>", lengthDesc, ruleDesc, langRule)
+
+	userPrompt := fmt.Sprintf("Title: %s\nURL: %s\nContent:\n%s%s", title, url, content, reminder)
+
+	return []ChatMessage{
+		{Role: "system", Content: systemPrompt},
+		{Role: "user", Content: userPrompt},
+	}
+}
+
 func GenerateSummarySync(title, url, text string, length int, summaryLang string) (string, error) {
-	targetLang := summaryLang
-	if targetLang == "auto" || targetLang == "" {
-		targetLang = config.GlobalConfig.SystemLanguage
-	}
-	if targetLang == "" {
-		targetLang = "zh"
-	}
-	engName, localName, chnName := GetLanguageNames(targetLang)
-
-	prompt := fmt.Sprintf(`请为以下文章生成摘要。要求：
-1. 必须使用 %s (%s) 以无序列表（Markdown Bullet Points，以 "- " 开头）的形式输出 3 到 5 条核心要点。
-2. 语言需简明扼要，直达核心。
-3. 突出重点：选择性地将最重要的结论、核心词句或关键数据加粗（使用 **加粗文本**），让读者能一眼扫视出文章的精髓，但注意不要过度加粗。
-4. 动态控制摘要总字数在 %d 字以内。
-5. 【重要】如果文章标题存在夸大其词、标题党、或者标题结论与正文事实严重不符的情况，请在摘要的最后添加一行以 "【标题警告】" 开头的提示（提示内容使用 %s (%s)，但前缀固定为 "【标题警告】"），指出标题中与事实不符或夸大的点。若无此情况，则绝对不写任何标题警告内容。
-6. 【重要】必须使用 %s (%s) 撰写上述摘要，绝对不要使用原文语言。`, chnName, localName, length, chnName, localName, engName, localName)
-
-	messages := []ChatMessage{
-		{Role: "system", Content: prompt},
-		{Role: "user", Content: fmt.Sprintf("文章标题: %s\n文章链接: %s\n文章正文内容: %s", title, url, text)},
-	}
-
+	messages := GetSummaryMessages(title, url, text, length, summaryLang)
 	return CallChatCompletion(messages, "summary", false)
 }
 
 func ParseAISummaryResponse(rawText string) (string, string) {
-	lines := strings.Split(rawText, "\n")
-	var summaryLines []string
 	clickbaitNote := ""
+	summary := ""
 
-	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "【标题警告】") {
-			clickbaitNote = strings.TrimPrefix(trimmed, "【标题警告】")
-			clickbaitNote = strings.TrimSpace(clickbaitNote)
-		} else if trimmed != "" {
-			summaryLines = append(summaryLines, line)
+	lines := strings.SplitN(rawText, "\n", 2)
+	firstLine := ""
+	if len(lines) > 0 {
+		firstLine = lines[0]
+	}
+	rest := ""
+	if len(lines) > 1 {
+		rest = lines[1]
+	}
+
+	if strings.HasPrefix(firstLine, "CLICKBAIT_NOTE:") {
+		noteVal := strings.TrimPrefix(firstLine, "CLICKBAIT_NOTE:")
+		noteVal = strings.TrimSpace(noteVal)
+		if strings.ToUpper(noteVal) != "NONE" && noteVal != "" {
+			clickbaitNote = noteVal
 		}
 	}
 
-	return strings.Join(summaryLines, "\n"), clickbaitNote
+	if strings.HasPrefix(rest, "SUMMARY:") {
+		summary = strings.TrimPrefix(rest, "SUMMARY:")
+		summary = strings.TrimSpace(summary)
+	} else {
+		// Fallback
+		if rest != "" {
+			summary = strings.TrimSpace(rest)
+		} else {
+			summary = strings.TrimSpace(rawText)
+		}
+	}
+
+	return summary, clickbaitNote
 }
 
 type TopicPromotion struct {
