@@ -764,7 +764,7 @@ func GetEntryFulltext(entryID int) (map[string]interface{}, error) {
 	}
 
 	ftRow, _ := crud.GetEntryFulltext(entryID)
-	if ftRow != nil {
+	if ftRow != nil && strings.TrimSpace(ftRow.Content) != "" {
 		cleanLen := EstimateCleanTextLength(ftRow.Content)
 		return map[string]interface{}{
 			"content":          ftRow.Content,
@@ -774,9 +774,16 @@ func GetEntryFulltext(entryID int) (map[string]interface{}, error) {
 		}, nil
 	}
 
-	content := crud.CleanHTML(entry.RawContent)
-	status := "ok"
-	_ = crud.SaveFulltext(entryID, content, status, "feed")
+	var content, status, fetcher string
+	if entry.FulltextReady == 1 && strings.TrimSpace(entry.RawContent) != "" {
+		content = crud.CleanHTML(entry.RawContent)
+		status = "ok"
+		fetcher = "feed"
+	} else {
+		content, status, fetcher = FetchAndExtractFulltext(entry.URL)
+	}
+
+	_ = crud.SaveFulltext(entryID, content, status, fetcher)
 
 	cleanLen := EstimateCleanTextLength(content)
 	return map[string]interface{}{

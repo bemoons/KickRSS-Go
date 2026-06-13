@@ -306,7 +306,7 @@ func SaveEntries(feedID int, rawEntries []models.Entry, defaultCatID int) (int, 
 
 	stmtInsert, err := tx.Prepare(`
 		INSERT INTO entries (feed_id, category_id, guid, title, url, author, published_at, fetched_at, raw_content, attention, likely_no_text, fulltext_ready)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'skim', 0, 0)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'skim', ?, ?)
 	`)
 	if err != nil {
 		return 0, err
