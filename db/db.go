@@ -89,6 +89,8 @@ CREATE TABLE IF NOT EXISTS chat_messages (
     created_at TEXT
 );
 
+CREATE INDEX IF NOT EXISTS idx_chat_messages_entry ON chat_messages(entry_id);
+
 CREATE TABLE IF NOT EXISTS translations (
     entry_id   INTEGER PRIMARY KEY REFERENCES entries(id) ON DELETE CASCADE,
     content    TEXT NOT NULL,
@@ -247,6 +249,9 @@ func migrateDatabase(db *sql.DB) error {
 		return err
 	}
 	if _, err := db.Exec("CREATE INDEX IF NOT EXISTS idx_entries_fetched_at ON entries(fetched_at);"); err != nil {
+		return err
+	}
+	if _, err := db.Exec("CREATE INDEX IF NOT EXISTS idx_chat_messages_entry ON chat_messages(entry_id);"); err != nil {
 		return err
 	}
 

@@ -383,7 +383,7 @@ func getUnreadEntries(c *gin.Context) {
 
 	whereClause := strings.Join(queryParts, " AND ")
 	query := fmt.Sprintf(`
-		SELECT e.id, e.feed_id, e.category_id, e.guid, e.title, e.url, e.author, e.published_at, e.fetched_at, e.raw_content,
+		SELECT e.id, e.feed_id, e.category_id, e.guid, e.title, e.url, e.author, e.published_at, e.fetched_at, "" as raw_content,
 		       e.attention, e.likely_no_text, e.fulltext_ready, e.is_read, e.read_at, e.classified_at, e.is_starred, e.starred_at,
 		       f.title as feed_title, c.name as category_name
 		FROM entries e
@@ -442,7 +442,7 @@ func getStarredEntries(c *gin.Context) {
 	offset, _ := strconv.Atoi(offsetStr)
 
 	query := `
-		SELECT e.id, e.feed_id, e.category_id, e.guid, e.title, e.url, e.author, e.published_at, e.fetched_at, e.raw_content,
+		SELECT e.id, e.feed_id, e.category_id, e.guid, e.title, e.url, e.author, e.published_at, e.fetched_at, "" as raw_content,
 		       e.attention, e.likely_no_text, e.fulltext_ready, e.is_read, e.read_at, e.classified_at, e.is_starred, e.starred_at,
 		       f.title as feed_title, c.name as category_name
 		FROM entries e
@@ -1868,7 +1868,7 @@ func getNotesEntries(c *gin.Context) {
 	offset, _ := strconv.Atoi(offsetStr)
 
 	query := `
-		SELECT e.id, e.feed_id, e.category_id, e.guid, e.title, e.url, e.author, e.published_at, e.fetched_at, e.raw_content,
+		SELECT e.id, e.feed_id, e.category_id, e.guid, e.title, e.url, e.author, e.published_at, e.fetched_at, "" as raw_content,
 		       e.attention, e.likely_no_text, e.fulltext_ready, e.is_read, e.read_at, e.classified_at, e.is_starred, e.starred_at,
 		       f.title as feed_title, c.name as category_name
 		FROM entries e

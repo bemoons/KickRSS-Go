@@ -1112,7 +1112,7 @@ func GetEntriesForCategory(categoryID int, unreadOnly bool, limit, offset int) (
 	}
 
 	query := fmt.Sprintf(`
-		SELECT e.id, e.feed_id, e.category_id, e.guid, e.title, e.url, e.author, e.published_at, e.fetched_at, e.raw_content,
+		SELECT e.id, e.feed_id, e.category_id, e.guid, e.title, e.url, e.author, e.published_at, e.fetched_at, "" as raw_content,
 		       e.attention, e.likely_no_text, e.fulltext_ready, e.is_read, e.read_at, e.classified_at, e.is_starred, e.starred_at,
 		       f.title as feed_title, c.name as category_name
 		FROM entries e
@@ -1141,7 +1141,7 @@ func GetEntriesForFeed(feedID int, unreadOnly bool, limit, offset int) ([]models
 	}
 
 	query := fmt.Sprintf(`
-		SELECT e.id, e.feed_id, e.category_id, e.guid, e.title, e.url, e.author, e.published_at, e.fetched_at, e.raw_content,
+		SELECT e.id, e.feed_id, e.category_id, e.guid, e.title, e.url, e.author, e.published_at, e.fetched_at, "" as raw_content,
 		       e.attention, e.likely_no_text, e.fulltext_ready, e.is_read, e.read_at, e.classified_at, e.is_starred, e.starred_at,
 		       f.title as feed_title, c.name as category_name
 		FROM entries e
@@ -1225,7 +1225,7 @@ func SearchEntries(queryStr string, unreadOnly bool, limit, offset int) ([]model
 	}
 
 	query := fmt.Sprintf(`
-		SELECT DISTINCT e.id, e.feed_id, e.category_id, e.guid, e.title, e.url, e.author, e.published_at, e.fetched_at, e.raw_content,
+		SELECT DISTINCT e.id, e.feed_id, e.category_id, e.guid, e.title, e.url, e.author, e.published_at, e.fetched_at, "" as raw_content,
 		       e.attention, e.likely_no_text, e.fulltext_ready, e.is_read, e.read_at, e.classified_at, e.is_starred, e.starred_at,
 		       f.title as feed_title, c.name as category_name
 		FROM entries e
