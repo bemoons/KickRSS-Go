@@ -1198,3 +1198,53 @@ func GetDailyTokenStats() (TokenStats, error) {
 	}
 	return stats, err
 }
+
+func SearchEntries(queryStr string, unreadOnly bool, limit, offset int) ([]models.Entry, error) {
+	words := []string{}
+	for _, w := range strings.Fields(queryStr) {
+		w = strings.TrimSpace(w)
+		if w != "" {
+			words = append(words, w)
+		}
+	}
+	if len(words) == 0 {
+		return []models.Entry{}, nil
+	}
+
+	var conditions []string
+	var params []interface{}
+	for _, w := range words {
+		likePat := "%" + w + "%"
+		conditions = append(conditions, "(e.title LIKE ? OR e.raw_content LIKE ? OR ft.content LIKE ? OR cm.content LIKE ?)")
+		params = append(params, likePat, likePat, likePat, likePat)
+	}
+
+	whereClause := strings.Join(conditions, " AND ")
+	if unreadOnly {
+		whereClause = "e.is_read = 0 AND (" + whereClause + ")"
+	}
+
+	query := fmt.Sprintf(`
+		SELECT DISTINCT e.id, e.feed_id, e.category_id, e.guid, e.title, e.url, e.author, e.published_at, e.fetched_at, e.raw_content,
+		       e.attention, e.likely_no_text, e.fulltext_ready, e.is_read, e.read_at, e.classified_at, e.is_starred, e.starred_at,
+		       f.title as feed_title, c.name as category_name
+		FROM entries e
+		JOIN feeds f ON f.id = e.feed_id
+		LEFT JOIN categories c ON c.id = e.category_id
+		LEFT JOIN fulltext ft ON ft.entry_id = e.id
+		LEFT JOIN chat_messages cm ON cm.entry_id = e.id
+		WHERE %s
+		ORDER BY e.published_at DESC, e.id DESC
+		LIMIT ? OFFSET ?
+	`, whereClause)
+
+	params = append(params, limit, offset)
+
+	rows, err := db.DB.Query(query, params...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	return scanEntries(rows)
+}

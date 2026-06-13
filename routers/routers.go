@@ -96,6 +96,7 @@ func SetupRouter() *gin.Engine {
 	r.GET("/entries/:entry_id/chat", getEntryChatHistory)
 	r.POST("/entries/:entry_id/engagement", recordEngagement)
 	r.POST("/entries/:entry_id/favorite", toggleFavorite)
+	r.GET("/search", searchEntries)
 
 	// OPML Routes
 	r.POST("/import/opml", importOPML)
@@ -1721,6 +1722,35 @@ func toggleFavorite(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"is_favorited": newStarred})
+}
+
+func searchEntries(c *gin.Context) {
+	q := c.Query("q")
+	unreadStr := c.DefaultQuery("unread", "0")
+	unreadOnly := unreadStr == "1"
+
+	limitStr := c.DefaultQuery("limit", "50")
+	offsetStr := c.DefaultQuery("offset", "0")
+	limit, _ := strconv.Atoi(limitStr)
+	offset, _ := strconv.Atoi(offsetStr)
+
+	if limit <= 0 {
+		limit = 50
+	}
+	if limit > 100 {
+		limit = 100
+	}
+	if offset < 0 {
+		offset = 0
+	}
+
+	entries, err := crud.SearchEntries(q, unreadOnly, limit, offset)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"detail": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, entries)
 }
 
 func getEntryFulltext(c *gin.Context) {
