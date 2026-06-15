@@ -9,11 +9,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"kickrss/config"
@@ -1977,6 +1979,16 @@ type LoginRequestBody struct {
 	Password string `json:"password" binding:"required"`
 }
 
+type loginAttemptRecord struct {
+	count        int
+	blockedUntil time.Time
+}
+
+var (
+	loginAttempts   = make(map[string]*loginAttemptRecord)
+	loginAttemptsMu sync.Mutex
+)
+
 func login(c *gin.Context) {
 	accessPassword := config.GlobalConfig.AccessPassword
 	if accessPassword == "" {
@@ -1990,12 +2002,53 @@ func login(c *gin.Context) {
 		return
 	}
 
+	clientIP := c.ClientIP()
+
+	// Rate limit check
+	loginAttemptsMu.Lock()
+	record, exists := loginAttempts[clientIP]
+	if exists && time.Now().Before(record.blockedUntil) {
+		remaining := int(record.blockedUntil.Sub(time.Now()).Seconds())
+		loginAttemptsMu.Unlock()
+		log.Printf("[Warning] Blocked login attempt from IP %s. Remaining block time: %ds", clientIP, remaining)
+		c.JSON(http.StatusTooManyRequests, gin.H{"detail": fmt.Sprintf("Too many failed attempts. Try again in %d seconds.", remaining)})
+		return
+	}
+	loginAttemptsMu.Unlock()
+
 	if body.Password == accessPassword {
+		// Success: clear rate limit record
+		loginAttemptsMu.Lock()
+		delete(loginAttempts, clientIP)
+		loginAttemptsMu.Unlock()
+
 		token := generateSessionToken(accessPassword)
 		c.SetCookie("kickrss_session", token, 7776000, "/", "", false, true)
 		c.JSON(http.StatusOK, gin.H{"ok": true})
 	} else {
-		c.JSON(http.StatusUnauthorized, gin.H{"detail": "Incorrect password"})
+		// Failed attempt: log, sleep, and record
+		log.Printf("[Warning] Failed login attempt from IP: %s", clientIP)
+		time.Sleep(1 * time.Second) // Slow down brute force
+
+		loginAttemptsMu.Lock()
+		record, exists = loginAttempts[clientIP]
+		if !exists {
+			record = &loginAttemptRecord{}
+			loginAttempts[clientIP] = record
+		}
+		record.count++
+		if record.count >= 5 {
+			record.blockedUntil = time.Now().Add(15 * time.Minute)
+			record.count = 0
+			log.Printf("[Warning] IP %s has been locked out for 15 minutes due to 5 failed login attempts.", clientIP)
+			loginAttemptsMu.Unlock()
+			c.JSON(http.StatusTooManyRequests, gin.H{"detail": "Too many failed attempts. locked out for 15 minutes."})
+			return
+		}
+		remainingAttempts := 5 - record.count
+		loginAttemptsMu.Unlock()
+
+		c.JSON(http.StatusUnauthorized, gin.H{"detail": fmt.Sprintf("Incorrect password. %d attempts remaining.", remainingAttempts)})
 	}
 }
 
