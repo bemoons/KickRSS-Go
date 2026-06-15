@@ -150,6 +150,7 @@ type SettingsUpdateBody struct {
 	ChatModel              *string `json:"chat_model"`
 	ChatMaxTokens          *int    `json:"chat_max_tokens"`
 	InterestProfileEnabled *bool   `json:"interest_profile_enabled"`
+	AccessPassword         *string `json:"access_password"`
 }
 
 func updateSettings(c *gin.Context) {
@@ -177,6 +178,7 @@ func updateSettings(c *gin.Context) {
 		body.ChatModel,
 		body.ChatMaxTokens,
 		body.InterestProfileEnabled,
+		body.AccessPassword,
 	)
 
 	if body.FetchIntervalMinutes != nil {

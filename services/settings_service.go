@@ -38,6 +38,7 @@ func GetSettings() map[string]interface{} {
 		"chat_api_key":    chatCfg.APIKey,
 		"chat_model":      chatCfg.Model,
 		"chat_max_tokens": chatMaxTokens,
+		"access_password": cfg.AccessPassword,
 	}
 }
 
@@ -59,6 +60,7 @@ func UpdateSettings(
 	chatModel *string,
 	chatMaxTokens *int,
 	interestProfileEnabled *bool,
+	accessPassword *string,
 ) {
 	cfg := config.GlobalConfig
 
@@ -112,6 +114,9 @@ func UpdateSettings(
 	}
 	if interestProfileEnabled != nil {
 		cfg.InterestProfileEnabled = *interestProfileEnabled
+	}
+	if accessPassword != nil {
+		cfg.AccessPassword = *accessPassword
 	}
 
 	_ = config.SaveConfig()
