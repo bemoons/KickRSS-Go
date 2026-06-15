@@ -2023,7 +2023,7 @@ func login(c *gin.Context) {
 		loginAttemptsMu.Unlock()
 
 		token := generateSessionToken(accessPassword)
-		c.SetCookie("kickrss_session", token, 7776000, "/", "", false, true)
+		c.SetCookie("kickrss_session", token, 7776000, "/", "", true, true)
 		c.JSON(http.StatusOK, gin.H{"ok": true})
 	} else {
 		// Failed attempt: log, sleep, and record
@@ -2053,7 +2053,7 @@ func login(c *gin.Context) {
 }
 
 func logout(c *gin.Context) {
-	c.SetCookie("kickrss_session", "", -1, "/", "", false, true)
+	c.SetCookie("kickrss_session", "", -1, "/", "", true, true)
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
