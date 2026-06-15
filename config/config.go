@@ -53,6 +53,7 @@ type AppConfig struct {
 	Classify               ClassifyConfig `yaml:"classify"`
 	SystemLanguage         string         `yaml:"system_language"`
 	InterestProfileEnabled bool           `yaml:"interest_profile_enabled"`
+	AccessPassword         string         `yaml:"access_password"`
 }
 
 var (

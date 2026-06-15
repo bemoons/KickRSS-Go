@@ -2,7 +2,10 @@ package routers
 
 import (
 	"bytes"
+	"crypto/hmac"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -39,6 +42,13 @@ func SetupRouter() *gin.Engine {
 		}
 		c.Next()
 	})
+
+	// Authenticated APIs Middleware
+	r.Use(authMiddleware())
+
+	// Auth Routes
+	r.POST("/login", login)
+	r.POST("/logout", logout)
 
 	// Static files serving via SPA fallback routing
 	r.NoRoute(func(c *gin.Context) {
@@ -1925,4 +1935,113 @@ func getNotesEntriesCount(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"total_count": count})
+}
+
+func authMiddleware() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		accessPassword := config.GlobalConfig.AccessPassword
+		if accessPassword == "" {
+			c.Next()
+			return
+		}
+
+		path := c.Request.URL.Path
+		protectedPrefixes := []string{
+			"/feeds", "/categories", "/entries", "/profile", "/settings", "/refresh", "/maintenance",
+		}
+
+		isProtected := false
+		for _, prefix := range protectedPrefixes {
+			if path == prefix || strings.HasPrefix(path, prefix+"/") {
+				isProtected = true
+				break
+			}
+		}
+
+		if isProtected {
+			sessionCookie, err := c.Cookie("kickrss_session")
+			if err != nil || !verifySessionToken(sessionCookie, accessPassword) {
+				c.JSON(http.StatusUnauthorized, gin.H{"detail": "Authentication required"})
+				c.Abort()
+				return
+			}
+		}
+
+		c.Next()
+	}
+}
+
+type LoginRequestBody struct {
+	Password string `json:"password" binding:"required"`
+}
+
+func login(c *gin.Context) {
+	accessPassword := config.GlobalConfig.AccessPassword
+	if accessPassword == "" {
+		c.JSON(http.StatusOK, gin.H{"ok": true, "message": "Auth not enabled"})
+		return
+	}
+
+	var body LoginRequestBody
+	if err := c.ShouldBindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"detail": err.Error()})
+		return
+	}
+
+	if body.Password == accessPassword {
+		token := generateSessionToken(accessPassword)
+		c.SetCookie("kickrss_session", token, 7776000, "/", "", false, true)
+		c.JSON(http.StatusOK, gin.H{"ok": true})
+	} else {
+		c.JSON(http.StatusUnauthorized, gin.H{"detail": "Incorrect password"})
+	}
+}
+
+func logout(c *gin.Context) {
+	c.SetCookie("kickrss_session", "", -1, "/", "", false, true)
+	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
+func getSigningKey(password string) []byte {
+	h := sha256.New()
+	h.Write([]byte(password))
+	return h.Sum(nil)
+}
+
+func generateSessionToken(password string) string {
+	payload := fmt.Sprintf("%d", time.Now().Unix())
+	key := getSigningKey(password)
+	mac := hmac.New(sha256.New, key)
+	mac.Write([]byte(payload))
+	sig := hex.EncodeToString(mac.Sum(nil))
+	return payload + "." + sig
+}
+
+func verifySessionToken(token string, password string) bool {
+	parts := strings.SplitN(token, ".", 2)
+	if len(parts) != 2 {
+		return false
+	}
+	payload := parts[0]
+	sig := parts[1]
+
+	key := getSigningKey(password)
+	mac := hmac.New(sha256.New, key)
+	mac.Write([]byte(payload))
+	expectedSig := hex.EncodeToString(mac.Sum(nil))
+
+	if !hmac.Equal([]byte(sig), []byte(expectedSig)) {
+		return false
+	}
+
+	timestamp, err := strconv.ParseInt(payload, 10, 64)
+	if err != nil {
+		return false
+	}
+
+	if time.Now().Unix()-timestamp > 7776000 { // 90 days
+		return false
+	}
+
+	return true
 }
