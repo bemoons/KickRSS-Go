@@ -36,7 +36,8 @@ type ChatCompletionRequest struct {
 type ChatCompletionResponse struct {
 	Choices []struct {
 		Message struct {
-			Content string `json:"content"`
+			Content          string `json:"content"`
+			ReasoningContent string `json:"reasoning_content"`
 		} `json:"message"`
 	} `json:"choices"`
 	Usage struct {
@@ -49,7 +50,8 @@ type ChatCompletionResponse struct {
 type ChatCompletionStreamResponse struct {
 	Choices []struct {
 		Delta struct {
-			Content string `json:"content"`
+			Content          string `json:"content"`
+			ReasoningContent string `json:"reasoning_content"`
 		} `json:"delta"`
 		FinishReason string `json:"finish_reason"`
 	} `json:"choices"`
@@ -76,8 +78,8 @@ func cleanJSONString(s string) string {
 	return strings.TrimSpace(s)
 }
 
-func CallChatCompletion(messages []ChatMessage, taskName string, responseFormatJSON bool) (string, error) {
-	cfg := config.GetAIConfig(taskName)
+func CallChatCompletion(messages []ChatMessage, taskName string, responseFormatJSON bool, summaryLength ...string) (string, error) {
+	cfg := config.GetAIConfig(taskName, summaryLength...)
 	if cfg.BaseURL == "" || cfg.APIKey == "" {
 		return "", errors.New("LLM API base URL or API key is not configured")
 	}
@@ -153,12 +155,28 @@ func CallChatCompletion(messages []ChatMessage, taskName string, responseFormatJ
 		return "", errors.New("AI API returned empty choices")
 	}
 
-	return completionResp.Choices[0].Message.Content, nil
+	msg := completionResp.Choices[0].Message
+	content := msg.Content
+	reasoning := msg.ReasoningContent
+
+	// If content is empty, check if reasoning contains SUMMARY:
+	if strings.TrimSpace(content) == "" && strings.TrimSpace(reasoning) != "" {
+		if strings.Contains(reasoning, "SUMMARY:") {
+			sumText, _ := ParseAISummaryResponse(reasoning)
+			if sumText != "" {
+				content = sumText
+			}
+		} else {
+			content = reasoning
+		}
+	}
+
+	return content, nil
 }
 
 // Helper to call OpenAI API in streaming mode and return connection reader
-func CallChatCompletionStream(messages []ChatMessage, taskName string) (*http.Response, error) {
-	cfg := config.GetAIConfig(taskName)
+func CallChatCompletionStream(messages []ChatMessage, taskName string, summaryLength ...string) (*http.Response, error) {
+	cfg := config.GetAIConfig(taskName, summaryLength...)
 	if cfg.BaseURL == "" || cfg.APIKey == "" {
 		return nil, errors.New("LLM API base URL or API key is not configured")
 	}
@@ -450,36 +468,54 @@ func GetSummaryMessages(title, url, content string, length interface{}, summaryL
 
 func GenerateSummarySync(title, url, text string, length int, summaryLang string) (string, error) {
 	messages := GetSummaryMessages(title, url, text, length, summaryLang)
-	return CallChatCompletion(messages, "summary", false)
+	result, err := CallChatCompletion(messages, "summary", false, strconv.Itoa(length))
+	if err != nil {
+		return "", err
+	}
+	if strings.Contains(result, "SUMMARY:") {
+		summary, _ := ParseAISummaryResponse(result)
+		result = summary
+	}
+	return result, nil
 }
 
 func ParseAISummaryResponse(rawText string) (string, string) {
 	clickbaitNote := ""
 	summary := ""
 
-	lines := strings.SplitN(rawText, "\n", 2)
-	firstLine := ""
-	if len(lines) > 0 {
-		firstLine = lines[0]
-	}
-	rest := ""
-	if len(lines) > 1 {
-		rest = lines[1]
-	}
+	if strings.Contains(rawText, "SUMMARY:") {
+		parts := strings.SplitN(rawText, "SUMMARY:", 2)
+		before := strings.TrimSpace(parts[0])
+		after := strings.TrimSpace(parts[1])
 
-	if strings.HasPrefix(firstLine, "CLICKBAIT_NOTE:") {
-		noteVal := strings.TrimPrefix(firstLine, "CLICKBAIT_NOTE:")
-		noteVal = strings.TrimSpace(noteVal)
-		if strings.ToUpper(noteVal) != "NONE" && noteVal != "" {
-			clickbaitNote = noteVal
+		if strings.Contains(before, "CLICKBAIT_NOTE:") {
+			noteParts := strings.SplitN(before, "CLICKBAIT_NOTE:", 2)
+			noteVal := strings.TrimSpace(noteParts[1])
+			if strings.ToUpper(noteVal) != "NONE" && noteVal != "" {
+				clickbaitNote = noteVal
+			}
 		}
-	}
-
-	if strings.HasPrefix(rest, "SUMMARY:") {
-		summary = strings.TrimPrefix(rest, "SUMMARY:")
-		summary = strings.TrimSpace(summary)
+		summary = after
 	} else {
 		// Fallback
+		lines := strings.SplitN(rawText, "\n", 2)
+		firstLine := ""
+		if len(lines) > 0 {
+			firstLine = lines[0]
+		}
+		rest := ""
+		if len(lines) > 1 {
+			rest = lines[1]
+		}
+
+		if strings.HasPrefix(firstLine, "CLICKBAIT_NOTE:") {
+			noteVal := strings.TrimPrefix(firstLine, "CLICKBAIT_NOTE:")
+			noteVal = strings.TrimSpace(noteVal)
+			if strings.ToUpper(noteVal) != "NONE" && noteVal != "" {
+				clickbaitNote = noteVal
+			}
+		}
+
 		if rest != "" {
 			summary = strings.TrimSpace(rest)
 		} else {
@@ -749,8 +785,8 @@ func EstimateCleanTextLength(text string) int {
 	return len([]rune(text))
 }
 
-// Stream reader helper for SSE server transmission
-func ReadSSEResponse(resp *http.Response, onChunk func(string) error) error {
+// Stream reader helper for SSE server transmission with optional reasoning exclusion
+func ReadSSEResponseEx(resp *http.Response, ignoreReasoning bool, onChunk func(string) error) error {
 	reader := bufio.NewReader(resp.Body)
 	for {
 		line, err := reader.ReadString('\n')
@@ -775,13 +811,22 @@ func ReadSSEResponse(resp *http.Response, onChunk func(string) error) error {
 			var streamResp ChatCompletionStreamResponse
 			if err := json.Unmarshal([]byte(data), &streamResp); err == nil {
 				if len(streamResp.Choices) > 0 {
-					content := streamResp.Choices[0].Delta.Content
+					choice := streamResp.Choices[0]
+					if ignoreReasoning && choice.Delta.ReasoningContent != "" {
+						continue
+					}
+
+					content := choice.Delta.Content
+					if !ignoreReasoning && content == "" {
+						content = choice.Delta.ReasoningContent
+					}
+
 					if content != "" {
 						if err := onChunk(content); err != nil {
 							return err
 						}
 					}
-					if streamResp.Choices[0].FinishReason == "stop" {
+					if choice.FinishReason == "stop" {
 						break
 					}
 				}
@@ -789,6 +834,11 @@ func ReadSSEResponse(resp *http.Response, onChunk func(string) error) error {
 		}
 	}
 	return nil
+}
+
+// Stream reader helper for SSE server transmission
+func ReadSSEResponse(resp *http.Response, onChunk func(string) error) error {
+	return ReadSSEResponseEx(resp, false, onChunk)
 }
 
 // --- Translation Services ---

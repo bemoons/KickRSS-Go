@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"sync"
 	"gopkg.in/yaml.v3"
 )
@@ -143,7 +144,7 @@ func GetDBPath() string {
 	return GlobalConfig.DBPath
 }
 
-func GetAIConfig(taskName string) AIConfigDetail {
+func GetAIConfig(taskName string, summaryLength ...string) AIConfigDetail {
 	configMutex.RLock()
 	defer configMutex.RUnlock()
 
@@ -162,13 +163,49 @@ func GetAIConfig(taskName string) AIConfigDetail {
 	}
 
 	def := GlobalConfig.AI.Default
+
+	maxTokens := taskCfg.MaxTokens
+	if taskName == "summary" && maxTokens == nil {
+		lenVal := ""
+		if len(summaryLength) > 0 && summaryLength[0] != "" {
+			lenVal = summaryLength[0]
+		} else {
+			lenVal = GlobalConfig.AI.SummaryLength
+		}
+		if lenVal == "" {
+			lenVal = "medium"
+		}
+
+		var targetNum int
+		var isNumeric bool
+		if val, err := strconv.Atoi(lenVal); err == nil {
+			targetNum = val
+			isNumeric = true
+		}
+
+		var computedMaxTokens int
+		if isNumeric {
+			computedMaxTokens = targetNum * 3
+			if computedMaxTokens < 1000 {
+				computedMaxTokens = 1000
+			}
+		} else if lenVal == "short" {
+			computedMaxTokens = 300
+		} else if lenVal == "long" {
+			computedMaxTokens = 1000
+		} else {
+			computedMaxTokens = 500
+		}
+		maxTokens = &computedMaxTokens
+	}
+
 	res := AIConfigDetail{
 		BaseURL:        taskCfg.BaseURL,
 		APIKey:         taskCfg.APIKey,
 		Model:          taskCfg.Model,
 		BatchSize:      taskCfg.BatchSize,
 		MaxConcurrency: taskCfg.MaxConcurrency,
-		MaxTokens:      taskCfg.MaxTokens,
+		MaxTokens:      maxTokens,
 	}
 
 	if res.BaseURL == "" {

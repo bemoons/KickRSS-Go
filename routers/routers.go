@@ -811,9 +811,33 @@ func getEntrySummary(c *gin.Context) {
 									fmt.Fprintf(w, "data: %s\n\n", string(payload))
 									c.Writer.Flush()
 								}
+								inSummary = true
+								restTrimmed := strings.TrimSpace(rest)
+								if restTrimmed != "" {
+									payload, _ := json.Marshal(gin.H{"summary": restTrimmed, "clickbait_note": nil, "status": "streaming"})
+									fmt.Fprintf(w, "data: %s\n\n", string(payload))
+									c.Writer.Flush()
+								}
+								buffer = ""
+							} else if clickbaitNote != nil {
+								inSummary = true
+								trimmed := strings.TrimSpace(buffer)
+								if trimmed != "" {
+									payload, _ := json.Marshal(gin.H{"summary": trimmed, "clickbait_note": nil, "status": "streaming"})
+									fmt.Fprintf(w, "data: %s\n\n", string(payload))
+									c.Writer.Flush()
+								}
+								buffer = ""
+							} else if len(buffer) >= 10 {
+								inSummary = true
+								payload, _ := json.Marshal(gin.H{"summary": buffer, "clickbait_note": nil, "status": "streaming"})
+								fmt.Fprintf(w, "data: %s\n\n", string(payload))
+								c.Writer.Flush()
+								buffer = ""
+							} else {
+								buffer = rest
 							}
-							buffer = rest
-						} else if len(buffer) >= 250 {
+						} else if len(buffer) >= 30 {
 							inSummary = true
 							payload, _ := json.Marshal(gin.H{"summary": buffer, "clickbait_note": nil, "status": "streaming"})
 							fmt.Fprintf(w, "data: %s\n\n", string(payload))
@@ -1035,7 +1059,7 @@ func chatWithEntry(c *gin.Context) {
 				defer respStream.Body.Close()
 
 				assistantFull := ""
-				errRead := services.ReadSSEResponse(respStream, func(chunk string) error {
+				errRead := services.ReadSSEResponseEx(respStream, true, func(chunk string) error {
 					assistantFull += chunk
 					payload, _ := json.Marshal(gin.H{"reply": chunk, "status": "streaming"})
 					fmt.Fprintf(w, "data: %s\n\n", string(payload))
@@ -1569,7 +1593,7 @@ Rules:
 					}
 
 					chunkFull := ""
-					errRead := services.ReadSSEResponse(respStream, func(chunk string) error {
+					errRead := services.ReadSSEResponseEx(respStream, true, func(chunk string) error {
 						chunkFull += chunk
 						payload, _ := json.Marshal(gin.H{"translated_content": chunk, "target_lang": targetLang, "status": "streaming"})
 						fmt.Fprintf(w, "data: %s\n\n", string(payload))
@@ -2023,7 +2047,7 @@ func login(c *gin.Context) {
 		loginAttemptsMu.Unlock()
 
 		token := generateSessionToken(accessPassword)
-		c.SetCookie("kickrss_session", token, 7776000, "/", "", true, true)
+		c.SetCookie("kickrss_session", token, 7776000, "/", "", false, true)
 		c.JSON(http.StatusOK, gin.H{"ok": true})
 	} else {
 		// Failed attempt: log, sleep, and record
@@ -2053,7 +2077,7 @@ func login(c *gin.Context) {
 }
 
 func logout(c *gin.Context) {
-	c.SetCookie("kickrss_session", "", -1, "/", "", true, true)
+	c.SetCookie("kickrss_session", "", -1, "/", "", false, true)
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
