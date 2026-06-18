@@ -441,9 +441,9 @@ func GetSummaryMessages(title, url, content string, length interface{}, summaryL
 		summaryLang = config.GlobalConfig.AI.SummaryLanguage
 	}
 	if summaryLang == "auto" || summaryLang == "" {
-		summaryLang = DetectLanguage(content)
+		summaryLang = config.GlobalConfig.SystemLanguage
 	}
-	if summaryLang == "" {
+	if summaryLang == "auto" || summaryLang == "" {
 		summaryLang = "zh"
 	}
 
