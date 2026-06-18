@@ -57,6 +57,7 @@ type ChatCompletionStreamResponse struct {
 		Delta struct {
 			Content          string `json:"content"`
 			ReasoningContent string `json:"reasoning_content"`
+			Reasoning        string `json:"reasoning"`
 		} `json:"delta"`
 		FinishReason string `json:"finish_reason"`
 	} `json:"choices"`
@@ -891,6 +892,14 @@ func ReadSSEResponseEx(resp *http.Response, ignoreReasoning bool, onChunk func(c
 					if choice.Delta.ReasoningContent != "" {
 						if !ignoreReasoning {
 							if err := onChunk(choice.Delta.ReasoningContent, true); err != nil {
+								return err
+							}
+						}
+						continue
+					}
+					if choice.Delta.Reasoning != "" {
+						if !ignoreReasoning {
+							if err := onChunk(choice.Delta.Reasoning, true); err != nil {
 								return err
 							}
 						}
