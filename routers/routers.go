@@ -1573,7 +1573,9 @@ Rules:
 - Keep the paragraph structure and line breaks EXACTLY identical to the source text.
 - Do NOT add any notes, explanations, introduction, or prefix. Output ONLY the translated paragraphs.
 - Translate to %s (%s) faithfully, maintaining the original tone and style.
+- Do NOT output any thinking process, reasoning, or <think> tags. Output ONLY the final translation.
 - CRITICAL: Regardless of the source language, you must translate it into %s (%s). Do NOT copy or output the original text if it is in a different language. You MUST output the translation in %s.
+- 绝对不要输出任何思考过程、推理内容或 <think> 标签！只能输出最终的翻译文本。
 - 必须且只能将文本翻译为 %s (%s)，绝对不要直接输出原文！请输出完整的翻译后文本。`, engName, localName, engName, localName, engName, localName, localName, chnName, localName)
 
 				translatedFull := ""

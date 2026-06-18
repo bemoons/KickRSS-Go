@@ -491,18 +491,30 @@ func GetSummaryMessages(title, url, content string, length interface{}, summaryL
 
 	var langRule string
 	var reminder string
+	isChinese := (summaryLang == "zh" || summaryLang == "zh-hant")
 
 	if summaryLang != "" {
-		langRule = fmt.Sprintf("CRITICAL: The summary must be written in %s (%s) ONLY, regardless of the original language of the article.\n"+
-			"- If the article is in Chinese or English, you MUST translate the key concepts and write the summary in %s (%s).\n"+
-			"- 必须且只能使用 %s (%s) 撰写 SUMMARY 部分，绝对不要使用原文语言（如中文或英文）来写摘要。", engName, localName, engName, localName, chnName, localName)
+		if isChinese {
+			langRule = fmt.Sprintf("CRITICAL: The summary must be written in %s (%s) ONLY, regardless of the original language of the article.\n"+
+				"- 必须且只能使用 %s (%s) 撰写 SUMMARY 部分，绝对不要使用原文语言来写摘要。", engName, localName, chnName, localName)
 
-		if isNumericLength {
-			langRule += fmt.Sprintf("\n- 必须写满大约 %d 个%s（汉字）（字数范围必须严格控制在 %d 到 %d 字之间）。\n"+
-				"- 这是字数的硬性指令，请把观点铺开、细节写饱满，绝对不能偷懒缩短！\n"+
-				"- 编写要求：%s", targetChars, chnName, int(float64(targetChars)*0.9), int(float64(targetChars)*1.15), cnStructureAdvice)
+			if isNumericLength {
+				langRule += fmt.Sprintf("\n- 必须写满大约 %d 个汉字（字数范围必须严格控制在 %d 到 %d 字之间）。\n"+
+					"- 这是字数的硬性指令，请把观点铺开、细节写饱满，绝对不能偷懒缩短！\n"+
+					"- 编写要求：%s", targetChars, int(float64(targetChars)*0.9), int(float64(targetChars)*1.15), cnStructureAdvice)
+			}
+			reminder = fmt.Sprintf("\n\nReminder: You MUST write the SUMMARY in %s (%s). (提示：请务必且只能使用 %s / %s 撰写摘要。)", engName, localName, chnName, localName)
+		} else {
+			langRule = fmt.Sprintf("CRITICAL: The summary must be written in %s (%s) ONLY, regardless of the original language of the article.\n"+
+				"- You MUST write the SUMMARY portion in %s (%s) ONLY. Do NOT write the summary in the original language if it is different. You MUST translate and write it in %s.", engName, localName, engName, localName, engName)
+
+			if isNumericLength {
+				langRule += fmt.Sprintf("\n- The summary MUST target approximately %d characters in %s.\n"+
+					"- Provide details and explain arguments fully to satisfy the length requirement.\n"+
+					"- Requirements: %s", targetChars, engName, structureAdvice)
+			}
+			reminder = fmt.Sprintf("\n\nReminder: You MUST write the SUMMARY in %s (%s) ONLY.", engName, localName)
 		}
-		reminder = fmt.Sprintf("\n\nReminder: You MUST write the SUMMARY in %s (%s). (提示：请务必且只能使用 %s / %s 撰写摘要。)", engName, localName, chnName, localName)
 	} else {
 		langRule = "The summary must be in the same language as the article content."
 		if isNumericLength {
@@ -511,27 +523,33 @@ func GetSummaryMessages(title, url, content string, length interface{}, summaryL
 		reminder = ""
 	}
 
+	formattingGuidelines := "- Formatting Guidelines (Extremely Important):\n"+
+		"  - Use markdown formatting to make the summary highly readable.\n"+
+		"  - Structure the summary primarily as a detailed bullet list starting with '-' (e.g., `- **Point Name**: Explanation`). Each bullet point should be highly informative, specific, and detailed.\n"+
+		"  - You may introduce the summary with a very brief opening paragraph (1-2 sentences), but the core of the summary must be structured as detailed list items rather than plain paragraphs.\n"+
+		"  - Selectively use double asterisks (`**text**`) to bold key conclusions, core arguments, or sentences that need focus to make the summary scannable."
+
+	if isChinese {
+		formattingGuidelines += "\n- 格式与排版规范（极重要）：\n"+
+			"  - 必须使用 Markdown 格式排版，确保摘要易读、易扫视。\n"+
+			"  - 主要排版结构：必须以条目（无序列表 `- `）为核心排版结构，避免使用大段的文字叙述。每一个条目（例如：`- **核心要点**：详细细节与事实展开`）必须内容扎实、数据细节饱满，并合理换行展开。\n"+
+			"  - 可以在最开头有一句非常简短的导语（1-2句），但整个摘要的主体必须是详细具体的条目列表。\n"+
+			"  - 突出重点：选择性地将最重要的结论、核心词句或关键数据加粗（使用 `**加粗文本**`），让读者能一眼扫视出文章的精髓，但注意不要过度加粗。"
+	}
+
 	systemPrompt := fmt.Sprintf("You are an expert RSS assistant. You are given the title, URL, and full-text content of an article.\n"+
 		"Your task is to:\n"+
 		"1. Verify if the title is misleading or clickbait compared to the actual content.\n"+
 		"2. Generate a %s.\n\n"+
+		"IMPORTANT: Do NOT output any thinking process or reasoning. Output ONLY the final answer.\n\n"+
 		"Rules:\n"+
 		"- %s\n"+
 		"- If the content is empty or contains no text, reply exactly with: \"NO_CONTENT\"\n"+
 		"- %s\n"+
-		"- Formatting Guidelines (Extremely Important):\n"+
-		"  - Use markdown formatting to make the summary highly readable.\n"+
-		"  - Structure the summary primarily as a detailed bullet list starting with '-' (e.g., `- **Point Name**: Explanation`). Each bullet point should be highly informative, specific, and detailed.\n"+
-		"  - You may introduce the summary with a very brief opening paragraph (1-2 sentences), but the core of the summary must be structured as detailed list items rather than plain paragraphs.\n"+
-		"  - Selectively use double asterisks (`**text**`) to bold key conclusions, core arguments, or sentences that need focus to make the summary scannable.\n"+
-		"- 格式与排版规范（极重要）：\n"+
-		"  - 必须使用 Markdown 格式排版，确保摘要易读、易扫视。\n"+
-		"  - 主要排版结构：必须以条目（无序列表 `- `）为核心排版结构，避免使用大段的文字叙述。每一个条目（例如：`- **核心要点**：详细细节与事实展开`）必须内容扎实、数据细节饱满，并合理换行展开。\n"+
-		"  - 可以在最开头有一句非常简短的导语（1-2句），但整个摘要的主体必须是详细具体的条目列表。\n"+
-		"  - 突出重点：选择性地将最重要的结论、核心词句或关键数据加粗（使用 `**加粗文本**`），让读者能一眼扫视出文章的精髓，但注意不要过度加粗。\n"+
+		"%s\n"+
 		"- Format your response EXACTLY like this (do NOT translate the prefix keys 'CLICKBAIT_NOTE:' and 'SUMMARY:'):\n"+
 		"CLICKBAIT_NOTE: <If the title is misleading, state the exact reason and clear up the discrepancy in 1 sentence. If NOT misleading, write NONE>\n"+
-		"SUMMARY: <write the detailed summary here>", lengthDesc, ruleDesc, langRule)
+		"SUMMARY: <write the detailed summary here>", lengthDesc, ruleDesc, langRule, formattingGuidelines)
 
 	userPrompt := fmt.Sprintf("Title: %s\nURL: %s\nContent:\n%s%s", title, url, content, reminder)
 
@@ -996,7 +1014,9 @@ Rules:
 - Keep the paragraph structure and line breaks EXACTLY identical to the source text.
 - Do NOT add any notes, explanations, introduction, or prefix. Output ONLY the translated paragraphs.
 - Translate to %s (%s) faithfully, maintaining the original tone and style.
+- Do NOT output any thinking process, reasoning, or <think> tags. Output ONLY the final translation.
 - CRITICAL: Regardless of the source language, you must translate it into %s (%s). Do NOT copy or output the original text if it is in a different language. You MUST output the translation in %s.
+- 绝对不要输出任何思考过程、推理内容或 <think> 标签！只能输出最终的翻译文本。
 - 必须且只能将文本翻译为 %s (%s)，绝对不要直接输出原文！请输出完整的翻译后文本。`, engName, localName, engName, localName, engName, localName, localName, chnName, localName)
 
 	type chunkResult struct {
