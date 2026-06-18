@@ -26,11 +26,16 @@ type ChatMessage struct {
 }
 
 type ChatCompletionRequest struct {
-	Model          string        `json:"model"`
-	Messages       []ChatMessage `json:"messages"`
-	ResponseFormat interface{}   `json:"response_format,omitempty"`
-	MaxTokens      *int          `json:"max_tokens,omitempty"`
-	Stream         bool          `json:"stream,omitempty"`
+	Model              string                 `json:"model"`
+	Messages           []ChatMessage          `json:"messages"`
+	ResponseFormat     interface{}            `json:"response_format,omitempty"`
+	MaxTokens          *int                   `json:"max_tokens,omitempty"`
+	Stream             bool                   `json:"stream,omitempty"`
+	ChatTemplateKwargs map[string]interface{} `json:"chat_template_kwargs,omitempty"`
+	Thinking           map[string]interface{} `json:"thinking,omitempty"`
+	ThinkingConfig     map[string]interface{} `json:"thinking_config,omitempty"`
+	Think              *bool                  `json:"think,omitempty"`
+	EnableThinking     *bool                  `json:"enable_thinking,omitempty"`
 }
 
 type ChatCompletionResponse struct {
@@ -97,6 +102,11 @@ func CallChatCompletion(messages []ChatMessage, taskName string, responseFormatJ
 		reqBody.MaxTokens = cfg.MaxTokens
 	}
 
+	// Append reasoning disablers if not chat task
+	if taskName != "chat" {
+		AppendReasoningDisabler(&reqBody, cfg.Model, cfg.BaseURL)
+	}
+
 	jsonBytes, err := json.Marshal(reqBody)
 	if err != nil {
 		return "", err
@@ -112,12 +122,45 @@ func CallChatCompletion(messages []ChatMessage, taskName string, responseFormatJ
 
 	client := &http.Client{Timeout: 120 * time.Second}
 	resp, err := client.Do(req)
+
+	// If 400 Bad Request (strict validator failed due to reasoning disabler fields), retry without them
+	if err == nil && resp.StatusCode == http.StatusBadRequest {
+		if resp != nil && resp.Body != nil {
+			resp.Body.Close()
+		}
+		reqBody.ChatTemplateKwargs = nil
+		reqBody.Thinking = nil
+		reqBody.ThinkingConfig = nil
+		reqBody.Think = nil
+		reqBody.EnableThinking = nil
+
+		jsonBytesRetry, _ := json.Marshal(reqBody)
+		reqRetry, errRetryReq := http.NewRequest("POST", url, bytes.NewBuffer(jsonBytesRetry))
+		if errRetryReq == nil {
+			reqRetry.Header.Set("Content-Type", "application/json")
+			reqRetry.Header.Set("Authorization", fmt.Sprintf("Bearer %s", cfg.APIKey))
+			respRetry, errRetry := client.Do(reqRetry)
+			if errRetry == nil {
+				resp = respRetry
+				err = nil
+			}
+		}
+	}
+
+	// Fallback if JSON mode is not supported by the endpoint (or if still 400 after stripping kwargs)
 	if err != nil || (err == nil && resp.StatusCode == http.StatusBadRequest) {
 		if responseFormatJSON {
 			if resp != nil && resp.Body != nil {
 				resp.Body.Close()
 			}
 			reqBody.ResponseFormat = nil
+			// Ensure disabler fields are also stripped during JSON fallback retry just in case
+			reqBody.ChatTemplateKwargs = nil
+			reqBody.Thinking = nil
+			reqBody.ThinkingConfig = nil
+			reqBody.Think = nil
+			reqBody.EnableThinking = nil
+
 			jsonBytesRetry, _ := json.Marshal(reqBody)
 			reqRetry, errRetryReq := http.NewRequest("POST", url, bytes.NewBuffer(jsonBytesRetry))
 			if errRetryReq == nil {
@@ -171,6 +214,7 @@ func CallChatCompletion(messages []ChatMessage, taskName string, responseFormatJ
 		}
 	}
 
+	content = CleanThinkBlock(content)
 	return content, nil
 }
 
@@ -191,6 +235,11 @@ func CallChatCompletionStream(messages []ChatMessage, taskName string, summaryLe
 		reqBody.MaxTokens = cfg.MaxTokens
 	}
 
+	// Append reasoning disablers if not chat task
+	if taskName != "chat" {
+		AppendReasoningDisabler(&reqBody, cfg.Model, cfg.BaseURL)
+	}
+
 	jsonBytes, err := json.Marshal(reqBody)
 	if err != nil {
 		return nil, err
@@ -207,6 +256,31 @@ func CallChatCompletionStream(messages []ChatMessage, taskName string, summaryLe
 	// No timeout set here because it's a stream connection
 	client := &http.Client{}
 	resp, err := client.Do(req)
+
+	// If 400 Bad Request (strict validator failed due to reasoning disabler fields), retry without them
+	if err == nil && resp.StatusCode == http.StatusBadRequest {
+		if resp != nil && resp.Body != nil {
+			resp.Body.Close()
+		}
+		reqBody.ChatTemplateKwargs = nil
+		reqBody.Thinking = nil
+		reqBody.ThinkingConfig = nil
+		reqBody.Think = nil
+		reqBody.EnableThinking = nil
+
+		jsonBytesRetry, _ := json.Marshal(reqBody)
+		reqRetry, errRetryReq := http.NewRequest("POST", url, bytes.NewBuffer(jsonBytesRetry))
+		if errRetryReq == nil {
+			reqRetry.Header.Set("Content-Type", "application/json")
+			reqRetry.Header.Set("Authorization", fmt.Sprintf("Bearer %s", cfg.APIKey))
+			respRetry, errRetry := client.Do(reqRetry)
+			if errRetry == nil {
+				resp = respRetry
+				err = nil
+			}
+		}
+	}
+
 	if err != nil {
 		return nil, err
 	}
@@ -788,6 +862,7 @@ func EstimateCleanTextLength(text string) int {
 // Stream reader helper for SSE server transmission with optional reasoning exclusion
 func ReadSSEResponseEx(resp *http.Response, ignoreReasoning bool, onChunk func(string) error) error {
 	reader := bufio.NewReader(resp.Body)
+	filter := NewThinkFilter()
 	for {
 		line, err := reader.ReadString('\n')
 		if err != nil {
@@ -822,8 +897,11 @@ func ReadSSEResponseEx(resp *http.Response, ignoreReasoning bool, onChunk func(s
 					}
 
 					if content != "" {
-						if err := onChunk(content); err != nil {
-							return err
+						filtered := filter.Filter(content)
+						if filtered != "" {
+							if err := onChunk(filtered); err != nil {
+								return err
+							}
 						}
 					}
 					if choice.FinishReason == "stop" {
@@ -833,12 +911,16 @@ func ReadSSEResponseEx(resp *http.Response, ignoreReasoning bool, onChunk func(s
 			}
 		}
 	}
+	flushed := filter.Flush()
+	if flushed != "" {
+		_ = onChunk(flushed)
+	}
 	return nil
 }
 
 // Stream reader helper for SSE server transmission
 func ReadSSEResponse(resp *http.Response, onChunk func(string) error) error {
-	return ReadSSEResponseEx(resp, false, onChunk)
+	return ReadSSEResponseEx(resp, true, onChunk)
 }
 
 // --- Translation Services ---
@@ -1085,4 +1167,253 @@ func GetLanguageNames(langCode string) (string, string, string) {
 		return val[0], val[1], val[2]
 	}
 	return "Simplified Chinese (简体中文)", "简体中文", "简体中文" // default fallback
+}
+
+// CleanThinkBlock removes any <think>...</think> tags and the content between them
+func CleanThinkBlock(text string) string {
+	re := regexp.MustCompile(`(?s)<think>.*?</think>`)
+	text = re.ReplaceAllString(text, "")
+	reUnclosed := regexp.MustCompile(`(?s)<think>.*$`)
+	return reUnclosed.ReplaceAllString(text, "")
+}
+
+type ThinkFilter struct {
+	inThink bool
+	buf     string
+}
+
+func NewThinkFilter() *ThinkFilter {
+	return &ThinkFilter{}
+}
+
+func (f *ThinkFilter) Filter(chunk string) string {
+	f.buf += chunk
+	output := ""
+	for {
+		if f.inThink {
+			idx := strings.Index(f.buf, "</think>")
+			if idx != -1 {
+				f.buf = f.buf[idx+len("</think>"):]
+				f.inThink = false
+				continue
+			}
+			hasPartial := false
+			endTag := "</think>"
+			for i := 1; i < len(endTag); i++ {
+				if strings.HasSuffix(f.buf, endTag[:i]) {
+					hasPartial = true
+					break
+				}
+			}
+			if hasPartial {
+				for i := len(endTag) - 1; i >= 1; i-- {
+					if strings.HasSuffix(f.buf, endTag[:i]) {
+						f.buf = endTag[:i]
+						break
+					}
+				}
+			} else {
+				f.buf = ""
+			}
+			break
+		} else {
+			idx := strings.Index(f.buf, "<think>")
+			if idx != -1 {
+				output += f.buf[:idx]
+				f.buf = f.buf[idx+len("<think>"):]
+				f.inThink = true
+				continue
+			}
+			startTag := "<think>"
+			partialIdx := -1
+			for i := 1; i < len(startTag); i++ {
+				if strings.HasSuffix(f.buf, startTag[:i]) {
+					partialIdx = len(f.buf) - i
+					break
+				}
+			}
+			if partialIdx != -1 {
+				output += f.buf[:partialIdx]
+				f.buf = f.buf[partialIdx:]
+			} else {
+				output += f.buf
+				f.buf = ""
+			}
+			break
+		}
+	}
+	return output
+}
+
+func (f *ThinkFilter) Flush() string {
+	if !f.inThink {
+		res := f.buf
+		f.buf = ""
+		return res
+	}
+	return ""
+}
+
+func IsReasoningModel(model string) bool {
+	m := strings.ToLower(model)
+	return strings.Contains(m, "r1") ||
+		strings.Contains(m, "qwq") ||
+		strings.Contains(m, "reasoner") ||
+		strings.Contains(m, "thinking") ||
+		strings.Contains(m, "reasoning")
+}
+
+func AppendReasoningDisabler(req *ChatCompletionRequest, model string, baseURL string) {
+	m := strings.ToLower(model)
+	url := strings.ToLower(baseURL)
+	
+	// Gemini
+	if strings.Contains(m, "gemini") || strings.Contains(url, "googleapis.com") {
+		req.ThinkingConfig = map[string]interface{}{
+			"thinking_budget": 0,
+		}
+	}
+	
+	// DeepSeek, Kimi, GLM, MiniMax
+	if strings.Contains(m, "deepseek") || strings.Contains(m, "kimi") || strings.Contains(m, "glm") || strings.Contains(m, "minimax") ||
+		strings.Contains(url, "deepseek") || strings.Contains(url, "moonshot") || strings.Contains(url, "zhipu") {
+		req.Thinking = map[string]interface{}{
+			"type": "disabled",
+		}
+	}
+	
+	// Ollama
+	falseVal := false
+	if strings.Contains(url, "localhost:11434") || strings.Contains(url, "127.0.0.1:11434") || strings.Contains(m, "ollama") {
+		req.Think = &falseVal
+	}
+	
+	// vLLM / Llama.cpp / Others
+	if IsReasoningModel(model) {
+		req.ChatTemplateKwargs = map[string]interface{}{
+			"enable_thinking": false,
+		}
+		req.EnableThinking = &falseVal
+		
+		if req.ThinkingConfig == nil {
+			req.ThinkingConfig = map[string]interface{}{
+				"thinking_budget": 0,
+			}
+		}
+		if req.Thinking == nil {
+			req.Thinking = map[string]interface{}{
+				"type": "disabled",
+			}
+		}
+		if req.Think == nil {
+			req.Think = &falseVal
+		}
+	}
+}
+
+func TestLLMReasoning(apiBaseURL, apiKey, model string) (string, string, error) {
+	url := fmt.Sprintf("%s/chat/completions", strings.TrimRight(apiBaseURL, "/"))
+	
+	reqBody := ChatCompletionRequest{
+		Model: model,
+		Messages: []ChatMessage{
+			{Role: "user", Content: "Please respond with exactly one word 'hello' and absolutely nothing else."},
+		},
+	}
+	AppendReasoningDisabler(&reqBody, model, apiBaseURL)
+	
+	jsonBytes, err := json.Marshal(reqBody)
+	if err != nil {
+		return "", "", err
+	}
+	
+	req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonBytes))
+	if err != nil {
+		return "", "", err
+	}
+	
+	req.Header.Set("Content-Type", "application/json")
+	if apiKey != "" {
+		req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", apiKey))
+	}
+	
+	client := &http.Client{Timeout: 15 * time.Second}
+	resp, err := client.Do(req)
+	
+	isRetry := false
+	if err == nil && resp.StatusCode == http.StatusBadRequest {
+		if resp.Body != nil {
+			resp.Body.Close()
+		}
+		
+		reqBody.ChatTemplateKwargs = nil
+		reqBody.Thinking = nil
+		reqBody.ThinkingConfig = nil
+		reqBody.Think = nil
+		reqBody.EnableThinking = nil
+		
+		jsonBytesRetry, _ := json.Marshal(reqBody)
+		reqRetry, errRetryReq := http.NewRequest("POST", url, bytes.NewBuffer(jsonBytesRetry))
+		if errRetryReq == nil {
+			reqRetry.Header.Set("Content-Type", "application/json")
+			if apiKey != "" {
+				reqRetry.Header.Set("Authorization", fmt.Sprintf("Bearer %s", apiKey))
+			}
+			respRetry, errRetry := client.Do(reqRetry)
+			if errRetry == nil {
+				resp = respRetry
+				err = nil
+				isRetry = true
+			}
+		}
+	}
+	
+	if err != nil {
+		return "", "", err
+	}
+	defer resp.Body.Close()
+	
+	if resp.StatusCode != http.StatusOK {
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		return "", "", fmt.Errorf("API returned status %d: %s", resp.StatusCode, string(bodyBytes))
+	}
+	
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", "", err
+	}
+	
+	var rawResp struct {
+		Choices []struct {
+			Message struct {
+				Content          string `json:"content"`
+				ReasoningContent string `json:"reasoning_content"`
+			} `json:"message"`
+		} `json:"choices"`
+	}
+	
+	if err := json.Unmarshal(bodyBytes, &rawResp); err != nil {
+		return "", "", err
+	}
+	
+	if len(rawResp.Choices) == 0 {
+		return "", "", errors.New("empty choices in response")
+	}
+	
+	content := rawResp.Choices[0].Message.Content
+	reasoningContent := rawResp.Choices[0].Message.ReasoningContent
+	
+	reasoningStatus := "not_reasoning"
+	hasReasoning := reasoningContent != "" || strings.Contains(content, "<think>") || strings.Contains(content, "</think>")
+	isReasoningModelName := IsReasoningModel(model)
+	
+	if isReasoningModelName || hasReasoning {
+		if isRetry || hasReasoning {
+			reasoningStatus = "unable_to_disable"
+		} else {
+			reasoningStatus = "disabled_successfully"
+		}
+	}
+	
+	return content, reasoningStatus, nil
 }

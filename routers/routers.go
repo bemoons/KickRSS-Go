@@ -1,7 +1,6 @@
 package routers
 
 import (
-	"bytes"
 	"crypto/hmac"
 	"crypto/sha256"
 	"database/sql"
@@ -13,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -67,6 +67,7 @@ func SetupRouter() *gin.Engine {
 	r.GET("/settings", getSettings)
 	r.PUT("/settings", updateSettings)
 	r.POST("/settings/test-llm", testLLMConnection)
+	r.POST("/settings/get-models", getModelsHandler)
 	r.GET("/settings/token-stats", getTokenStats)
 
 	// Feeds Routes
@@ -1821,28 +1822,49 @@ func testLLMConnection(c *gin.Context) {
 		return
 	}
 
-	url := fmt.Sprintf("%s/chat/completions", strings.TrimRight(body.AIBaseURL, "/"))
-	reqBody := map[string]interface{}{
-		"model": body.AIModel,
-		"messages": []map[string]string{
-			{"role": "user", "content": "ping"},
-		},
-		"max_tokens": 10,
+	if body.AIModel == "" {
+		c.JSON(http.StatusOK, gin.H{"success": false, "message": "未指定测试模型"})
+		return
 	}
 
-	jsonBytes, err := json.Marshal(reqBody)
+	content, reasoningStatus, err := services.TestLLMReasoning(body.AIBaseURL, body.AIAPIKey, body.AIModel)
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{"success": false, "message": "测试连接失败: " + err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success":          true,
+		"message":          "连接成功！",
+		"model_response":   content,
+		"reasoning_status": reasoningStatus,
+	})
+}
+
+type GetModelsRequest struct {
+	AIBaseURL string `json:"ai_base_url"`
+	AIAPIKey  string `json:"ai_api_key"`
+}
+
+func getModelsHandler(c *gin.Context) {
+	var body GetModelsRequest
+	if err := c.ShouldBindJSON(&body); err != nil {
+		c.JSON(http.StatusOK, gin.H{"success": false, "message": "请求体格式错误: " + err.Error()})
+		return
+	}
+
+	if body.AIBaseURL == "" {
+		c.JSON(http.StatusOK, gin.H{"success": false, "message": "API Base URL 不能为空"})
+		return
+	}
+
+	url := fmt.Sprintf("%s/models", strings.TrimRight(body.AIBaseURL, "/"))
+	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{"success": false, "message": "构建请求失败: " + err.Error()})
 		return
 	}
 
-	req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonBytes))
-	if err != nil {
-		c.JSON(http.StatusOK, gin.H{"success": false, "message": "创建请求对象失败: " + err.Error()})
-		return
-	}
-
-	req.Header.Set("Content-Type", "application/json")
 	if body.AIAPIKey != "" {
 		req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", body.AIAPIKey))
 	}
@@ -1850,43 +1872,64 @@ func testLLMConnection(c *gin.Context) {
 	client := &http.Client{Timeout: 10 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
-		c.JSON(http.StatusOK, gin.H{"success": false, "message": "请求接口失败: " + err.Error()})
+		c.JSON(http.StatusOK, gin.H{"success": false, "message": "获取模型列表失败: " + err.Error()})
 		return
 	}
 	defer resp.Body.Close()
 
+	bodyBytes, _ := io.ReadAll(resp.Body)
+
 	if resp.StatusCode != http.StatusOK {
-		bodyBytes, _ := io.ReadAll(resp.Body)
 		c.JSON(http.StatusOK, gin.H{
 			"success": false,
-			"message": fmt.Sprintf("API 返回状态码 %d: %s", resp.StatusCode, string(bodyBytes)),
+			"message": fmt.Sprintf("获取模型列表失败，状态码 %d: %s", resp.StatusCode, string(bodyBytes)),
 		})
 		return
 	}
 
-	var completionResp struct {
-		Choices []struct {
-			Message struct {
-				Content string `json:"content"`
-			} `json:"message"`
-		} `json:"choices"`
+	var modelsResp struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
 	}
 
-	if err := json.NewDecoder(resp.Body).Decode(&completionResp); err != nil {
-		c.JSON(http.StatusOK, gin.H{"success": false, "message": "解析 API 响应 JSON 失败: " + err.Error()})
+	if err := json.Unmarshal(bodyBytes, &modelsResp); err != nil {
+		// Try parsing Ollama format
+		var ollamaResp struct {
+			Models []struct {
+				Name string `json:"name"`
+				Model string `json:"model"`
+			} `json:"models"`
+		}
+		if err2 := json.Unmarshal(bodyBytes, &ollamaResp); err2 == nil && len(ollamaResp.Models) > 0 {
+			var modelIDs []string
+			for _, m := range ollamaResp.Models {
+				name := m.Name
+				if name == "" {
+					name = m.Model
+				}
+				if name != "" {
+					modelIDs = append(modelIDs, name)
+				}
+			}
+			sort.Strings(modelIDs)
+			c.JSON(http.StatusOK, gin.H{"success": true, "models": modelIDs})
+			return
+		}
+
+		c.JSON(http.StatusOK, gin.H{"success": false, "message": "解析模型列表响应失败: " + err.Error()})
 		return
 	}
 
-	if len(completionResp.Choices) == 0 {
-		c.JSON(http.StatusOK, gin.H{"success": false, "message": "API 返回的 choices 列表为空"})
-		return
+	var modelIDs []string
+	for _, m := range modelsResp.Data {
+		if m.ID != "" {
+			modelIDs = append(modelIDs, m.ID)
+		}
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"success":        true,
-		"message":        "连接成功！",
-		"model_response": completionResp.Choices[0].Message.Content,
-	})
+	sort.Strings(modelIDs)
+	c.JSON(http.StatusOK, gin.H{"success": true, "models": modelIDs})
 }
 
 func getTokenStats(c *gin.Context) {
