@@ -1260,18 +1260,24 @@ func IsReasoningModel(model string) bool {
 		strings.Contains(m, "qwq") ||
 		strings.Contains(m, "reasoner") ||
 		strings.Contains(m, "thinking") ||
-		strings.Contains(m, "reasoning")
+		strings.Contains(m, "reasoning") ||
+		strings.Contains(m, "qwen") ||
+		strings.Contains(m, "3.6") ||
+		strings.Contains(m, "3.5") ||
+		strings.Contains(m, "a3b")
 }
 
 func AppendReasoningDisabler(req *ChatCompletionRequest, model string, baseURL string) {
 	m := strings.ToLower(model)
 	url := strings.ToLower(baseURL)
+	falseVal := false
 	
 	// Gemini
 	if strings.Contains(m, "gemini") || strings.Contains(url, "googleapis.com") {
 		req.ThinkingConfig = map[string]interface{}{
 			"thinking_budget": 0,
 		}
+		return
 	}
 	
 	// DeepSeek, Kimi, GLM, MiniMax
@@ -1280,34 +1286,21 @@ func AppendReasoningDisabler(req *ChatCompletionRequest, model string, baseURL s
 		req.Thinking = map[string]interface{}{
 			"type": "disabled",
 		}
+		return
 	}
 	
 	// Ollama
-	falseVal := false
 	if strings.Contains(url, "localhost:11434") || strings.Contains(url, "127.0.0.1:11434") || strings.Contains(m, "ollama") {
 		req.Think = &falseVal
+		return
 	}
 	
-	// vLLM / Llama.cpp / Others
+	// vLLM / Llama.cpp / Qwen / Others
 	if IsReasoningModel(model) {
 		req.ChatTemplateKwargs = map[string]interface{}{
 			"enable_thinking": false,
 		}
 		req.EnableThinking = &falseVal
-		
-		if req.ThinkingConfig == nil {
-			req.ThinkingConfig = map[string]interface{}{
-				"thinking_budget": 0,
-			}
-		}
-		if req.Thinking == nil {
-			req.Thinking = map[string]interface{}{
-				"type": "disabled",
-			}
-		}
-		if req.Think == nil {
-			req.Think = &falseVal
-		}
 	}
 }
 
