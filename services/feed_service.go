@@ -781,6 +781,11 @@ func GetEntryFulltext(entryID int) (map[string]interface{}, error) {
 		fetcher = "feed"
 	} else {
 		content, status, fetcher = FetchAndExtractFulltext(entry.URL)
+		if status == "fetch_failed" && strings.TrimSpace(entry.RawContent) != "" {
+			content = crud.CleanHTML(entry.RawContent)
+			status = "ok"
+			fetcher = "feed"
+		}
 	}
 
 	_ = crud.SaveFulltext(entryID, content, status, fetcher)

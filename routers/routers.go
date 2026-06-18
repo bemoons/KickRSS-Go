@@ -770,7 +770,7 @@ func getEntrySummary(c *gin.Context) {
 				var clickbaitNote *string = nil
 				buffer := ""
 
-				errRead := services.ReadSSEResponse(respStream, func(chunk string) error {
+				errRead := services.ReadSSEResponse(respStream, func(chunk string, isReasoning bool) error {
 					summaryFull += chunk
 
 					if !inSummary {
@@ -838,12 +838,17 @@ func getEntrySummary(c *gin.Context) {
 							} else {
 								buffer = rest
 							}
-						} else if len(buffer) >= 30 {
-							inSummary = true
-							payload, _ := json.Marshal(gin.H{"summary": buffer, "clickbait_note": nil, "status": "streaming"})
-							fmt.Fprintf(w, "data: %s\n\n", string(payload))
-							c.Writer.Flush()
-							buffer = ""
+						} else {
+							isClickbaitPrefix := strings.HasPrefix("CLICKBAIT_NOTE:", buffer) || strings.HasPrefix(buffer, "CLICKBAIT_NOTE:")
+							if isClickbaitPrefix {
+								// do nothing, wait for newline or SUMMARY:
+							} else if len(buffer) >= 30 {
+								inSummary = true
+								payload, _ := json.Marshal(gin.H{"summary": buffer, "clickbait_note": nil, "status": "streaming"})
+								fmt.Fprintf(w, "data: %s\n\n", string(payload))
+								c.Writer.Flush()
+								buffer = ""
+							}
 						}
 					} else {
 						payload, _ := json.Marshal(gin.H{"summary": chunk, "clickbait_note": nil, "status": "streaming"})
@@ -1060,11 +1065,17 @@ func chatWithEntry(c *gin.Context) {
 				defer respStream.Body.Close()
 
 				assistantFull := ""
-				errRead := services.ReadSSEResponseEx(respStream, true, func(chunk string) error {
-					assistantFull += chunk
-					payload, _ := json.Marshal(gin.H{"reply": chunk, "status": "streaming"})
-					fmt.Fprintf(w, "data: %s\n\n", string(payload))
-					c.Writer.Flush()
+				errRead := services.ReadSSEResponseEx(respStream, false, func(chunk string, isReasoning bool) error {
+					if isReasoning {
+						payload, _ := json.Marshal(gin.H{"reply": chunk, "status": "thinking"})
+						fmt.Fprintf(w, "data: %s\n\n", string(payload))
+						c.Writer.Flush()
+					} else {
+						assistantFull += chunk
+						payload, _ := json.Marshal(gin.H{"reply": chunk, "status": "streaming"})
+						fmt.Fprintf(w, "data: %s\n\n", string(payload))
+						c.Writer.Flush()
+					}
 					return nil
 				})
 
@@ -1594,7 +1605,7 @@ Rules:
 					}
 
 					chunkFull := ""
-					errRead := services.ReadSSEResponseEx(respStream, true, func(chunk string) error {
+					errRead := services.ReadSSEResponseEx(respStream, true, func(chunk string, isReasoning bool) error {
 						chunkFull += chunk
 						payload, _ := json.Marshal(gin.H{"translated_content": chunk, "target_lang": targetLang, "status": "streaming"})
 						fmt.Fprintf(w, "data: %s\n\n", string(payload))

@@ -860,7 +860,7 @@ func EstimateCleanTextLength(text string) int {
 }
 
 // Stream reader helper for SSE server transmission with optional reasoning exclusion
-func ReadSSEResponseEx(resp *http.Response, ignoreReasoning bool, onChunk func(string) error) error {
+func ReadSSEResponseEx(resp *http.Response, ignoreReasoning bool, onChunk func(chunk string, isReasoning bool) error) error {
 	reader := bufio.NewReader(resp.Body)
 	filter := NewThinkFilter()
 	for {
@@ -887,19 +887,26 @@ func ReadSSEResponseEx(resp *http.Response, ignoreReasoning bool, onChunk func(s
 			if err := json.Unmarshal([]byte(data), &streamResp); err == nil {
 				if len(streamResp.Choices) > 0 {
 					choice := streamResp.Choices[0]
-					if ignoreReasoning && choice.Delta.ReasoningContent != "" {
+					
+					if choice.Delta.ReasoningContent != "" {
+						if !ignoreReasoning {
+							if err := onChunk(choice.Delta.ReasoningContent, true); err != nil {
+								return err
+							}
+						}
 						continue
 					}
 
 					content := choice.Delta.Content
-					if !ignoreReasoning && content == "" {
-						content = choice.Delta.ReasoningContent
-					}
-
 					if content != "" {
-						filtered := filter.Filter(content)
-						if filtered != "" {
-							if err := onChunk(filtered); err != nil {
+						cleanContent, reasoningContent := filter.FilterEx(content)
+						if reasoningContent != "" && !ignoreReasoning {
+							if err := onChunk(reasoningContent, true); err != nil {
+								return err
+							}
+						}
+						if cleanContent != "" {
+							if err := onChunk(cleanContent, false); err != nil {
 								return err
 							}
 						}
@@ -913,13 +920,17 @@ func ReadSSEResponseEx(resp *http.Response, ignoreReasoning bool, onChunk func(s
 	}
 	flushed := filter.Flush()
 	if flushed != "" {
-		_ = onChunk(flushed)
+		if !ignoreReasoning && filter.inThink {
+			_ = onChunk(flushed, true)
+		} else if !filter.inThink {
+			_ = onChunk(flushed, false)
+		}
 	}
 	return nil
 }
 
 // Stream reader helper for SSE server transmission
-func ReadSSEResponse(resp *http.Response, onChunk func(string) error) error {
+func ReadSSEResponse(resp *http.Response, onChunk func(string, bool) error) error {
 	return ReadSSEResponseEx(resp, true, onChunk)
 }
 
@@ -1187,12 +1198,19 @@ func NewThinkFilter() *ThinkFilter {
 }
 
 func (f *ThinkFilter) Filter(chunk string) string {
+	clean, _ := f.FilterEx(chunk)
+	return clean
+}
+
+func (f *ThinkFilter) FilterEx(chunk string) (string, string) {
 	f.buf += chunk
 	output := ""
+	reasoning := ""
 	for {
 		if f.inThink {
 			idx := strings.Index(f.buf, "</think>")
 			if idx != -1 {
+				reasoning += f.buf[:idx]
 				f.buf = f.buf[idx+len("</think>"):]
 				f.inThink = false
 				continue
@@ -1208,11 +1226,13 @@ func (f *ThinkFilter) Filter(chunk string) string {
 			if hasPartial {
 				for i := len(endTag) - 1; i >= 1; i-- {
 					if strings.HasSuffix(f.buf, endTag[:i]) {
+						reasoning += f.buf[:len(f.buf)-i]
 						f.buf = endTag[:i]
 						break
 					}
 				}
 			} else {
+				reasoning += f.buf
 				f.buf = ""
 			}
 			break
@@ -1242,7 +1262,7 @@ func (f *ThinkFilter) Filter(chunk string) string {
 			break
 		}
 	}
-	return output
+	return output, reasoning
 }
 
 func (f *ThinkFilter) Flush() string {
