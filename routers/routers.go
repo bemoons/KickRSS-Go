@@ -1016,18 +1016,25 @@ func chatWithEntry(c *gin.Context) {
 		langRule = fmt.Sprintf("【语言硬性要求】\n你必须且只能使用 %s (%s) 来回答用户的问题。无论原文是用何种语言编写，也无论用户用何种语言提问，你的回复语言必须完全是 %s (%s)。", chnName, localName, chnName, localName)
 	}
 
+	useReasoning := config.GlobalConfig.AI.Tasks.Chat.UseReasoning == nil || *config.GlobalConfig.AI.Tasks.Chat.UseReasoning
+	reasoningRule := ""
+	if !useReasoning {
+		reasoningRule = "【极其重要】请直接输出最终的解答，绝对不要包含任何思考过程、推理内容或 <think> 标签。"
+	}
+
 	// Construct system prompt
 	systemPrompt := fmt.Sprintf(`你是一个专业的 RSS 阅读助手。请基于以下提供的文章内容，回答用户的问题。
 你必须仅依据文章的事实进行专业、深入、客观的解答，如果有任何论点超出文章事实，请明确指出“根据原文未提及”。
 请使用 Markdown 格式排版你的回答。
 
 %s
+%s
 
 文章标题: %s
 文章原文内容:
 ---
 %s
----`, langRule, entry.Title, ftText)
+---`, langRule, reasoningRule, entry.Title, ftText)
 
 	var messages []services.ChatMessage
 	messages = append(messages, services.ChatMessage{Role: "system", Content: systemPrompt})
@@ -1071,7 +1078,6 @@ func chatWithEntry(c *gin.Context) {
 				defer respStream.Body.Close()
 
 				assistantFull := ""
-				useReasoning := config.GlobalConfig.AI.Tasks.Chat.UseReasoning == nil || *config.GlobalConfig.AI.Tasks.Chat.UseReasoning
 				
 				errRead := services.ReadSSEResponseEx(respStream, !useReasoning, func(chunk string, isReasoning bool) error {
 					if isReasoning && useReasoning {
