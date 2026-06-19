@@ -99,7 +99,10 @@ func CallChatCompletion(messages []ChatMessage, taskName string, responseFormatJ
 	if responseFormatJSON {
 		reqBody.ResponseFormat = map[string]string{"type": "json_object"}
 	}
-	if cfg.MaxTokens != nil {
+	if IsReasoningModel(cfg.Model) {
+		maxTokensVal := 8192
+		reqBody.MaxTokens = &maxTokensVal
+	} else if cfg.MaxTokens != nil {
 		reqBody.MaxTokens = cfg.MaxTokens
 	}
 
@@ -232,7 +235,10 @@ func CallChatCompletionStream(messages []ChatMessage, taskName string, summaryLe
 		Messages: messages,
 		Stream:   true,
 	}
-	if cfg.MaxTokens != nil {
+	if IsReasoningModel(cfg.Model) {
+		maxTokensVal := 8192
+		reqBody.MaxTokens = &maxTokensVal
+	} else if cfg.MaxTokens != nil {
 		reqBody.MaxTokens = cfg.MaxTokens
 	}
 

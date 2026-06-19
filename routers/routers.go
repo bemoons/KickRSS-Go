@@ -780,9 +780,9 @@ func getEntrySummary(c *gin.Context) {
 							beforeSum := strings.TrimSpace(parts[0])
 							afterSum := strings.TrimLeft(parts[1], " \t\r\n")
 
-							if strings.HasPrefix(beforeSum, "CLICKBAIT_NOTE:") {
-								noteVal := strings.TrimPrefix(beforeSum, "CLICKBAIT_NOTE:")
-								noteVal = strings.TrimSpace(noteVal)
+							if strings.Contains(beforeSum, "CLICKBAIT_NOTE:") {
+								noteParts := strings.SplitN(beforeSum, "CLICKBAIT_NOTE:", 2)
+								noteVal := strings.TrimSpace(noteParts[1])
 								if strings.ToUpper(noteVal) != "NONE" && noteVal != "" {
 									clickbaitNote = &noteVal
 									payload, _ := json.Marshal(gin.H{"summary": "", "clickbait_note": noteVal, "status": "streaming"})
@@ -798,55 +798,59 @@ func getEntrySummary(c *gin.Context) {
 								c.Writer.Flush()
 							}
 							buffer = ""
-						} else if strings.Contains(buffer, "\n") {
-							parts := strings.SplitN(buffer, "\n", 2)
-							firstLine := strings.TrimSpace(parts[0])
-							rest := parts[1]
-
-							if strings.HasPrefix(firstLine, "CLICKBAIT_NOTE:") {
-								noteVal := strings.TrimPrefix(firstLine, "CLICKBAIT_NOTE:")
-								noteVal = strings.TrimSpace(noteVal)
-								if strings.ToUpper(noteVal) != "NONE" && noteVal != "" {
-									clickbaitNote = &noteVal
-									payload, _ := json.Marshal(gin.H{"summary": "", "clickbait_note": noteVal, "status": "streaming"})
-									fmt.Fprintf(w, "data: %s\n\n", string(payload))
-									c.Writer.Flush()
-								}
-								inSummary = true
-								restTrimmed := strings.TrimSpace(rest)
-								if restTrimmed != "" {
-									payload, _ := json.Marshal(gin.H{"summary": restTrimmed, "clickbait_note": nil, "status": "streaming"})
-									fmt.Fprintf(w, "data: %s\n\n", string(payload))
-									c.Writer.Flush()
-								}
-								buffer = ""
-							} else if clickbaitNote != nil {
-								inSummary = true
-								trimmed := strings.TrimSpace(buffer)
-								if trimmed != "" {
-									payload, _ := json.Marshal(gin.H{"summary": trimmed, "clickbait_note": nil, "status": "streaming"})
-									fmt.Fprintf(w, "data: %s\n\n", string(payload))
-									c.Writer.Flush()
-								}
-								buffer = ""
-							} else if len(buffer) >= 10 {
-								inSummary = true
-								payload, _ := json.Marshal(gin.H{"summary": buffer, "clickbait_note": nil, "status": "streaming"})
-								fmt.Fprintf(w, "data: %s\n\n", string(payload))
-								c.Writer.Flush()
-								buffer = ""
-							} else {
-								buffer = rest
-							}
 						} else {
+							// Check if it's a plain summary (doesn't start with CLICKBAIT_NOTE: or SUMMARY:)
 							isClickbaitPrefix := strings.HasPrefix("CLICKBAIT_NOTE:", buffer) || strings.HasPrefix(buffer, "CLICKBAIT_NOTE:")
-							if isClickbaitPrefix {
-								// do nothing, wait for newline or SUMMARY:
-							} else if len(buffer) >= 30 {
+							isSummaryPrefix := strings.HasPrefix("SUMMARY:", buffer) || strings.HasPrefix(buffer, "SUMMARY:")
+							
+							if !isClickbaitPrefix && !isSummaryPrefix && len(buffer) >= 60 {
 								inSummary = true
 								payload, _ := json.Marshal(gin.H{"summary": buffer, "clickbait_note": nil, "status": "streaming"})
 								fmt.Fprintf(w, "data: %s\n\n", string(payload))
 								c.Writer.Flush()
+								buffer = ""
+							} else if strings.Contains(buffer, "\n") {
+								// We have a newline, let's see if the first line is CLICKBAIT_NOTE and if there's substantial text after it without SUMMARY:
+								parts := strings.SplitN(buffer, "\n", 2)
+								firstLine := strings.TrimSpace(parts[0])
+								rest := parts[1]
+								
+								if strings.HasPrefix(firstLine, "CLICKBAIT_NOTE:") {
+									restTrimmed := strings.TrimSpace(rest)
+									// If rest has accumulated enough content or contains newline, assume SUMMARY: is missing
+									if len(restTrimmed) >= 60 || strings.Contains(restTrimmed, "\n") {
+										noteVal := strings.TrimPrefix(firstLine, "CLICKBAIT_NOTE:")
+										noteVal = strings.TrimSpace(noteVal)
+										if strings.ToUpper(noteVal) != "NONE" && noteVal != "" {
+											clickbaitNote = &noteVal
+											payload, _ := json.Marshal(gin.H{"summary": "", "clickbait_note": noteVal, "status": "streaming"})
+											fmt.Fprintf(w, "data: %s\n\n", string(payload))
+											c.Writer.Flush()
+										}
+										inSummary = true
+										if restTrimmed != "" {
+											payload, _ := json.Marshal(gin.H{"summary": restTrimmed, "clickbait_note": nil, "status": "streaming"})
+											fmt.Fprintf(w, "data: %s\n\n", string(payload))
+											c.Writer.Flush()
+										}
+										buffer = ""
+									}
+								}
+							} else if len(buffer) >= 300 {
+								// absolute fallback if too long
+								sumText, click := services.ParseAISummaryResponse(buffer)
+								if click != "" {
+									clickbaitNote = &click
+									payload, _ := json.Marshal(gin.H{"summary": "", "clickbait_note": click, "status": "streaming"})
+									fmt.Fprintf(w, "data: %s\n\n", string(payload))
+									c.Writer.Flush()
+								}
+								inSummary = true
+								if sumText != "" {
+									payload, _ := json.Marshal(gin.H{"summary": sumText, "clickbait_note": nil, "status": "streaming"})
+									fmt.Fprintf(w, "data: %s\n\n", string(payload))
+									c.Writer.Flush()
+								}
 								buffer = ""
 							}
 						}
