@@ -152,6 +152,7 @@ type SettingsUpdateBody struct {
 	ChatAPIKey             *string `json:"chat_api_key"`
 	ChatModel              *string `json:"chat_model"`
 	ChatMaxTokens          *int    `json:"chat_max_tokens"`
+	ChatUseReasoning       *bool   `json:"chat_use_reasoning"`
 	InterestProfileEnabled *bool   `json:"interest_profile_enabled"`
 	AccessPassword         *string `json:"access_password"`
 }
@@ -180,6 +181,7 @@ func updateSettings(c *gin.Context) {
 		body.ChatAPIKey,
 		body.ChatModel,
 		body.ChatMaxTokens,
+		body.ChatUseReasoning,
 		body.InterestProfileEnabled,
 		body.AccessPassword,
 	)
@@ -1069,12 +1071,14 @@ func chatWithEntry(c *gin.Context) {
 				defer respStream.Body.Close()
 
 				assistantFull := ""
-				errRead := services.ReadSSEResponseEx(respStream, false, func(chunk string, isReasoning bool) error {
-					if isReasoning {
+				useReasoning := config.GlobalConfig.AI.Tasks.Chat.UseReasoning == nil || *config.GlobalConfig.AI.Tasks.Chat.UseReasoning
+				
+				errRead := services.ReadSSEResponseEx(respStream, !useReasoning, func(chunk string, isReasoning bool) error {
+					if isReasoning && useReasoning {
 						payload, _ := json.Marshal(gin.H{"reply": chunk, "status": "thinking"})
 						fmt.Fprintf(w, "data: %s\n\n", string(payload))
 						c.Writer.Flush()
-					} else {
+					} else if !isReasoning {
 						assistantFull += chunk
 						payload, _ := json.Marshal(gin.H{"reply": chunk, "status": "streaming"})
 						fmt.Fprintf(w, "data: %s\n\n", string(payload))

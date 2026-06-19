@@ -15,6 +15,7 @@ type AIConfigDetail struct {
 	BatchSize      int    `yaml:"batch_size"`
 	MaxConcurrency int    `yaml:"max_concurrency"`
 	MaxTokens      *int   `yaml:"max_tokens"`
+	UseReasoning   *bool  `yaml:"use_reasoning"`
 }
 
 type AITasks struct {
@@ -206,6 +207,7 @@ func GetAIConfig(taskName string, summaryLength ...string) AIConfigDetail {
 		BatchSize:      taskCfg.BatchSize,
 		MaxConcurrency: taskCfg.MaxConcurrency,
 		MaxTokens:      maxTokens,
+		UseReasoning:   taskCfg.UseReasoning,
 	}
 
 	if res.BaseURL == "" {

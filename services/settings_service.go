@@ -38,6 +38,7 @@ func GetSettings() map[string]interface{} {
 		"chat_api_key":    chatCfg.APIKey,
 		"chat_model":      chatCfg.Model,
 		"chat_max_tokens": chatMaxTokens,
+		"chat_use_reasoning": chatCfg.UseReasoning == nil || *chatCfg.UseReasoning,
 		"access_password": cfg.AccessPassword,
 	}
 }
@@ -59,6 +60,7 @@ func UpdateSettings(
 	chatAPIKey *string,
 	chatModel *string,
 	chatMaxTokens *int,
+	chatUseReasoning *bool,
 	interestProfileEnabled *bool,
 	accessPassword *string,
 ) {
@@ -111,6 +113,9 @@ func UpdateSettings(
 	}
 	if chatMaxTokens != nil {
 		cfg.AI.Tasks.Chat.MaxTokens = chatMaxTokens
+	}
+	if chatUseReasoning != nil {
+		cfg.AI.Tasks.Chat.UseReasoning = chatUseReasoning
 	}
 	if interestProfileEnabled != nil {
 		cfg.InterestProfileEnabled = *interestProfileEnabled

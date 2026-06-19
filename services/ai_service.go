@@ -99,15 +99,15 @@ func CallChatCompletion(messages []ChatMessage, taskName string, responseFormatJ
 	if responseFormatJSON {
 		reqBody.ResponseFormat = map[string]string{"type": "json_object"}
 	}
-	if IsReasoningModel(cfg.Model) {
+	if IsReasoningModel(cfg.Model) && (cfg.UseReasoning == nil || *cfg.UseReasoning) {
 		maxTokensVal := 8192
 		reqBody.MaxTokens = &maxTokensVal
 	} else if cfg.MaxTokens != nil {
 		reqBody.MaxTokens = cfg.MaxTokens
 	}
 
-	// Append reasoning disablers if not chat task
-	if taskName != "chat" {
+	// Append reasoning disablers if not chat task OR if reasoning is disabled
+	if taskName != "chat" || (cfg.UseReasoning != nil && !*cfg.UseReasoning) {
 		AppendReasoningDisabler(&reqBody, cfg.Model, cfg.BaseURL)
 	}
 
@@ -235,15 +235,15 @@ func CallChatCompletionStream(messages []ChatMessage, taskName string, summaryLe
 		Messages: messages,
 		Stream:   true,
 	}
-	if IsReasoningModel(cfg.Model) {
+	if IsReasoningModel(cfg.Model) && (cfg.UseReasoning == nil || *cfg.UseReasoning) {
 		maxTokensVal := 8192
 		reqBody.MaxTokens = &maxTokensVal
 	} else if cfg.MaxTokens != nil {
 		reqBody.MaxTokens = cfg.MaxTokens
 	}
 
-	// Append reasoning disablers if not chat task
-	if taskName != "chat" {
+	// Append reasoning disablers if not chat task OR if reasoning is disabled
+	if taskName != "chat" || (cfg.UseReasoning != nil && !*cfg.UseReasoning) {
 		AppendReasoningDisabler(&reqBody, cfg.Model, cfg.BaseURL)
 	}
 
