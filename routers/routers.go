@@ -1017,10 +1017,6 @@ func chatWithEntry(c *gin.Context) {
 	}
 
 	useReasoning := config.GlobalConfig.AI.Tasks.Chat.UseReasoning == nil || *config.GlobalConfig.AI.Tasks.Chat.UseReasoning
-	reasoningRule := ""
-	if !useReasoning {
-		reasoningRule = "【极其重要】请直接输出最终的解答，绝对不要包含任何思考过程、推理内容或 <think> 标签。"
-	}
 
 	// Construct system prompt
 	systemPrompt := fmt.Sprintf(`你是一个专业的 RSS 阅读助手。请基于以下提供的文章内容，回答用户的问题。
@@ -1028,13 +1024,12 @@ func chatWithEntry(c *gin.Context) {
 请使用 Markdown 格式排版你的回答。
 
 %s
-%s
 
 文章标题: %s
 文章原文内容:
 ---
 %s
----`, langRule, reasoningRule, entry.Title, ftText)
+---`, langRule, entry.Title, ftText)
 
 	var messages []services.ChatMessage
 	messages = append(messages, services.ChatMessage{Role: "system", Content: systemPrompt})
