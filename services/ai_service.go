@@ -59,7 +59,7 @@ type ChatCompletionStreamResponse struct {
 			ReasoningContent string `json:"reasoning_content"`
 			Reasoning        string `json:"reasoning"`
 		} `json:"delta"`
-		FinishReason string `json:"finish_reason"`
+		FinishReason *string `json:"finish_reason"`
 	} `json:"choices"`
 }
 
@@ -938,7 +938,7 @@ func ReadSSEResponseEx(resp *http.Response, ignoreReasoning bool, onChunk func(c
 							}
 						}
 					}
-					if choice.FinishReason == "stop" {
+					if choice.FinishReason != nil && *choice.FinishReason == "stop" {
 						break
 					}
 				}
