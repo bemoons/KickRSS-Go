@@ -164,8 +164,17 @@ func extractWithRenderingService(url, serviceURL string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	bodyStr := string(bodyBytes)
-	if isWafOrBlocked(bodyStr) {
+
+	// Parse JSON response from the rendering service
+	var renderResp struct {
+		HTML string `json:"html"`
+	}
+	if err := json.Unmarshal(bodyBytes, &renderResp); err != nil {
+		return "", fmt.Errorf("failed to parse rendering service response: %w", err)
+	}
+
+	htmlContent := renderResp.HTML
+	if isWafOrBlocked(htmlContent) {
 		return "", fmt.Errorf("rendering service response hit WAF block page")
 	}
 
@@ -173,7 +182,7 @@ func extractWithRenderingService(url, serviceURL string) (string, error) {
 	if errURL != nil {
 		parsedURL, _ = neturl.Parse("http://localhost")
 	}
-	article, err := readability.FromReader(strings.NewReader(bodyStr), parsedURL)
+	article, err := readability.FromReader(strings.NewReader(htmlContent), parsedURL)
 	if err != nil {
 		return "", err
 	}
