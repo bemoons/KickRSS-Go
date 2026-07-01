@@ -758,7 +758,7 @@ func getEntrySummary(c *gin.Context) {
 
 			if aiStreamEnabled {
 				messages := services.GetSummaryMessages(entry.Title, entry.URL, ftText, targetChars, config.GlobalConfig.AI.SummaryLanguage)
-				respStream, err := services.CallChatCompletionStream(messages, "summary")
+				respStream, err := services.CallChatCompletionStream(c.Request.Context(), messages, "summary")
 				if err != nil {
 					payload, _ := json.Marshal(gin.H{"summary": "", "clickbait_note": nil, "status": "error", "detail": err.Error()})
 					fmt.Fprintf(w, "data: %s\n\n", string(payload))
@@ -1063,7 +1063,7 @@ func chatWithEntry(c *gin.Context) {
 			aiStreamEnabled := config.GlobalConfig.AI.Stream
 
 			if aiStreamEnabled {
-				respStream, err := services.CallChatCompletionStream(messages, "chat")
+				respStream, err := services.CallChatCompletionStream(c.Request.Context(), messages, "chat")
 				if err != nil {
 					payload, _ := json.Marshal(gin.H{"reply": "", "status": "error", "detail": err.Error()})
 					fmt.Fprintf(w, "data: %s\n\n", string(payload))
@@ -1607,7 +1607,7 @@ Rules:
 						{Role: "user", Content: userContent},
 					}
 
-					respStream, err := services.CallChatCompletionStream(messages, "summary")
+					respStream, err := services.CallChatCompletionStream(c.Request.Context(), messages, "summary")
 					if err != nil {
 						payload, _ := json.Marshal(gin.H{"translated_content": "", "status": "error", "detail": err.Error()})
 						fmt.Fprintf(w, "data: %s\n\n", string(payload))

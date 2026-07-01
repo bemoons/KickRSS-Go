@@ -3,6 +3,7 @@ package services
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -223,7 +224,7 @@ func CallChatCompletion(messages []ChatMessage, taskName string, responseFormatJ
 }
 
 // Helper to call OpenAI API in streaming mode and return connection reader
-func CallChatCompletionStream(messages []ChatMessage, taskName string, summaryLength ...string) (*http.Response, error) {
+func CallChatCompletionStream(ctx context.Context, messages []ChatMessage, taskName string, summaryLength ...string) (*http.Response, error) {
 	cfg := config.GetAIConfig(taskName, summaryLength...)
 	if cfg.BaseURL == "" || cfg.APIKey == "" {
 		return nil, errors.New("LLM API base URL or API key is not configured")
@@ -252,7 +253,7 @@ func CallChatCompletionStream(messages []ChatMessage, taskName string, summaryLe
 		return nil, err
 	}
 
-	req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonBytes))
+	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(jsonBytes))
 	if err != nil {
 		return nil, err
 	}
@@ -261,7 +262,7 @@ func CallChatCompletionStream(messages []ChatMessage, taskName string, summaryLe
 	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", cfg.APIKey))
 
 	// No timeout set here because it's a stream connection
-	client := &http.Client{}
+	client := newSafeHTTPClient()
 	resp, err := client.Do(req)
 
 	// If 400 Bad Request (strict validator failed due to reasoning disabler fields), retry without them
@@ -276,7 +277,7 @@ func CallChatCompletionStream(messages []ChatMessage, taskName string, summaryLe
 		reqBody.EnableThinking = nil
 
 		jsonBytesRetry, _ := json.Marshal(reqBody)
-		reqRetry, errRetryReq := http.NewRequest("POST", url, bytes.NewBuffer(jsonBytesRetry))
+		reqRetry, errRetryReq := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(jsonBytesRetry))
 		if errRetryReq == nil {
 			reqRetry.Header.Set("Content-Type", "application/json")
 			reqRetry.Header.Set("Authorization", fmt.Sprintf("Bearer %s", cfg.APIKey))

@@ -349,10 +349,10 @@ func SaveEntries(feedID int, rawEntries []models.Entry, defaultCatID int) (int, 
 					fulltextReady = 1
 				}
 
-				stmtUpdate, err := tx.Prepare("UPDATE entries SET raw_content = ?, fulltext_ready = ? WHERE id = ?")
-				if err == nil {
-					_, _ = stmtUpdate.Exec(re.RawContent, fulltextReady, existingID)
-					stmtUpdate.Close()
+				if fulltextReady == 1 {
+					_, _ = tx.Exec("UPDATE entries SET raw_content = ?, fulltext_ready = ?, likely_no_text = 0 WHERE id = ?", re.RawContent, fulltextReady, existingID)
+				} else {
+					_, _ = tx.Exec("UPDATE entries SET raw_content = ?, fulltext_ready = ? WHERE id = ?", re.RawContent, fulltextReady, existingID)
 				}
 
 				// If fulltext is now ready, clean and cache it
@@ -615,12 +615,12 @@ func SaveFulltext(entryID int, content, status, fetcher string) error {
 		return err
 	}
 	
-	// Also mark fulltext_ready in entries
-	ready := 0
+	// Also mark fulltext_ready in entries (and clear likely_no_text if status is ok)
 	if status == "ok" {
-		ready = 1
+		_, err = db.DB.Exec("UPDATE entries SET fulltext_ready = 1, likely_no_text = 0 WHERE id = ?", entryID)
+	} else {
+		_, err = db.DB.Exec("UPDATE entries SET fulltext_ready = 0 WHERE id = ?", entryID)
 	}
-	_, err = db.DB.Exec("UPDATE entries SET fulltext_ready = ? WHERE id = ?", ready, entryID)
 	return err
 }
 
