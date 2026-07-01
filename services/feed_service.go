@@ -932,7 +932,27 @@ func GetEntryFulltext(entryID int) (map[string]interface{}, error) {
 		}, nil
 	}
 
-	// 2. Cache missed or failed previously. Try self-healing: trigger single feed refresh (forcing reload)
+	minChars := config.GlobalConfig.Fulltext.MinTextChars
+	if minChars == 0 {
+		minChars = 200
+	}
+
+	// 2. Prioritize entries.RawContent if it is already present and long enough!
+	if strings.TrimSpace(entry.RawContent) != "" {
+		cleanContent := crud.CleanHTML(entry.RawContent)
+		if len([]rune(cleanContent)) >= minChars {
+			_ = crud.SaveFulltext(entryID, cleanContent, "ok", "feed")
+			cleanLen := EstimateCleanTextLength(cleanContent)
+			return map[string]interface{}{
+				"content":          cleanContent,
+				"status":           "ok",
+				"has_summary":      hasSummary,
+				"clean_char_count": cleanLen,
+			}, nil
+		}
+	}
+
+	// 3. Cache missed or too short. Try self-healing: trigger single feed refresh (forcing reload)
 	_ = refreshSingleFeedInternal(entry.FeedID, true)
 
 	// Re-read the database to check if feed refresh successfully updated this entry
@@ -948,19 +968,26 @@ func GetEntryFulltext(entryID int) (map[string]interface{}, error) {
 		}, nil
 	}
 
-	// 3. Fall back to crawler scraper
-	var content, status, fetcher string
-	if entry.FulltextReady == 1 && strings.TrimSpace(entry.RawContent) != "" {
+	if strings.TrimSpace(entry.RawContent) != "" {
+		cleanContent := crud.CleanHTML(entry.RawContent)
+		if len([]rune(cleanContent)) >= minChars {
+			_ = crud.SaveFulltext(entryID, cleanContent, "ok", "feed")
+			cleanLen := EstimateCleanTextLength(cleanContent)
+			return map[string]interface{}{
+				"content":          cleanContent,
+				"status":           "ok",
+				"has_summary":      hasSummary,
+				"clean_char_count": cleanLen,
+			}, nil
+		}
+	}
+
+	// 4. Fall back to crawler web scraper/Jina as last resort
+	content, status, fetcher := FetchAndExtractFulltext(entry.URL)
+	if status == "fetch_failed" && strings.TrimSpace(entry.RawContent) != "" {
 		content = crud.CleanHTML(entry.RawContent)
 		status = "ok"
 		fetcher = "feed"
-	} else {
-		content, status, fetcher = FetchAndExtractFulltext(entry.URL)
-		if status == "fetch_failed" && strings.TrimSpace(entry.RawContent) != "" {
-			content = crud.CleanHTML(entry.RawContent)
-			status = "ok"
-			fetcher = "feed"
-		}
 	}
 
 	_ = crud.SaveFulltext(entryID, content, status, fetcher)
