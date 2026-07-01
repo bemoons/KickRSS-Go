@@ -298,7 +298,7 @@ func SaveEntries(feedID int, rawEntries []models.Entry, defaultCatID int) (int, 
 	newCount := 0
 	now := time.Now().UTC().Format(time.RFC3339)
 
-	stmtCheck, err := tx.Prepare("SELECT id FROM entries WHERE feed_id = ? AND guid = ?")
+	stmtCheck, err := tx.Prepare("SELECT id, raw_content, fulltext_ready FROM entries WHERE feed_id = ? AND guid = ?")
 	if err != nil {
 		return 0, err
 	}
@@ -315,7 +315,9 @@ func SaveEntries(feedID int, rawEntries []models.Entry, defaultCatID int) (int, 
 
 	for _, re := range rawEntries {
 		var existingID int
-		errCheck := stmtCheck.QueryRow(feedID, re.Guid).Scan(&existingID)
+		var existingRawContent string
+		var existingFulltextReady int
+		errCheck := stmtCheck.QueryRow(feedID, re.Guid).Scan(&existingID, &existingRawContent, &existingFulltextReady)
 		if errCheck == sql.ErrNoRows {
 			// Determine if likely no text
 			likelyNoText := 0
@@ -339,6 +341,45 @@ func SaveEntries(feedID int, rawEntries []models.Entry, defaultCatID int) (int, 
 				return 0, err
 			}
 			newCount++
+		} else if errCheck == nil {
+			// Self-healing: If existing content lacks fulltext and feed has updated with longer text, update it
+			if existingFulltextReady == 0 && len(re.RawContent) > len(existingRawContent) {
+				fulltextReady := 0
+				if len(re.RawContent) > 800 {
+					fulltextReady = 1
+				}
+
+				stmtUpdate, err := tx.Prepare("UPDATE entries SET raw_content = ?, fulltext_ready = ? WHERE id = ?")
+				if err == nil {
+					_, _ = stmtUpdate.Exec(re.RawContent, fulltextReady, existingID)
+					stmtUpdate.Close()
+				}
+
+				// If fulltext is now ready, clean and cache it
+				if fulltextReady == 1 {
+					cleanContent := CleanHTML(re.RawContent)
+					status := "no_text"
+					if len(cleanContent) >= 200 { // minChars default 200
+						status = "ok"
+					}
+
+					var ftExists int
+					errFt := tx.QueryRow("SELECT entry_id FROM fulltext WHERE entry_id = ?", existingID).Scan(&ftExists)
+					if errFt == sql.ErrNoRows {
+						stmtInsFt, err := tx.Prepare("INSERT INTO fulltext (entry_id, content, status, fetched_at, fetcher) VALUES (?, ?, ?, ?, 'feed')")
+						if err == nil {
+							_, _ = stmtInsFt.Exec(existingID, cleanContent, status, now)
+							stmtInsFt.Close()
+						}
+					} else if errFt == nil {
+						stmtUpdFt, err := tx.Prepare("UPDATE fulltext SET content = ?, status = ?, fetched_at = ?, fetcher = 'feed' WHERE entry_id = ?")
+						if err == nil {
+							_, _ = stmtUpdFt.Exec(cleanContent, status, now, existingID)
+							stmtUpdFt.Close()
+						}
+					}
+				}
+			}
 		}
 	}
 
