@@ -1008,7 +1008,7 @@ func refreshSingleFeedInternal(feedID int, force bool) error {
 	}
 
 	_ = EnsureFeedSeeded(feedID)
-	ClassifyFeedEntries(feedID)
+	go ClassifyFeedEntries(feedID)
 	return nil
 }
 
