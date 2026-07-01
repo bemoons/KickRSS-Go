@@ -62,6 +62,28 @@ func FetchAndExtractFulltext(url string) (string, string, string) {
 	return "", "fetch_failed", "trafilatura"
 }
 
+func isWafOrBlocked(html string) bool {
+	if html == "" {
+		return false
+	}
+	htmlLower := strings.ToLower(html)
+	wafKeywords := []string{
+		"aliyun_waf",
+		"cf_app_waf",
+		"为了更好的访问体验，请进行验证",
+		"__cf_chl_opt",
+		"challenge-platform",
+		"sec-cpt",
+		"安全验证",
+	}
+	for _, kw := range wafKeywords {
+		if strings.Contains(htmlLower, strings.ToLower(kw)) {
+			return true
+		}
+	}
+	return false
+}
+
 func extractDirect(url string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
@@ -83,16 +105,30 @@ func extractDirect(url string) (string, error) {
 		return "", fmt.Errorf("HTTP status %d", resp.StatusCode)
 	}
 
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", err
+	}
+	bodyStr := string(bodyBytes)
+	if isWafOrBlocked(bodyStr) {
+		return "", fmt.Errorf("direct fetch response hit WAF block page")
+	}
+
 	parsedURL, errURL := neturl.Parse(url)
 	if errURL != nil {
 		parsedURL, _ = neturl.Parse("http://localhost")
 	}
-	article, err := readability.FromReader(resp.Body, parsedURL)
+	article, err := readability.FromReader(strings.NewReader(bodyStr), parsedURL)
 	if err != nil {
 		return "", err
 	}
 
-	return crud.CleanHTML(article.Content), nil
+	content := crud.CleanHTML(article.Content)
+	if isWafOrBlocked(content) {
+		return "", fmt.Errorf("extracted content contains WAF indicators")
+	}
+
+	return content, nil
 }
 
 func extractWithRenderingService(url, serviceURL string) (string, error) {
@@ -119,16 +155,30 @@ func extractWithRenderingService(url, serviceURL string) (string, error) {
 		return "", fmt.Errorf("Rendering service returned HTTP %d", resp.StatusCode)
 	}
 
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", err
+	}
+	bodyStr := string(bodyBytes)
+	if isWafOrBlocked(bodyStr) {
+		return "", fmt.Errorf("rendering service response hit WAF block page")
+	}
+
 	parsedURL, errURL := neturl.Parse(url)
 	if errURL != nil {
 		parsedURL, _ = neturl.Parse("http://localhost")
 	}
-	article, err := readability.FromReader(resp.Body, parsedURL)
+	article, err := readability.FromReader(strings.NewReader(bodyStr), parsedURL)
 	if err != nil {
 		return "", err
 	}
 
-	return crud.CleanHTML(article.Content), nil
+	content := crud.CleanHTML(article.Content)
+	if isWafOrBlocked(content) {
+		return "", fmt.Errorf("extracted content contains WAF indicators")
+	}
+
+	return content, nil
 }
 
 // --- Feed Ingesting (GoFeed) ---
