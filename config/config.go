@@ -38,7 +38,9 @@ type AIConfig struct {
 
 type FulltextConfig struct {
 	Fetcher             string `yaml:"fetcher"`
+	FallbackEngine      string `yaml:"fallback_engine"`
 	RenderingServiceURL string `yaml:"rendering_service_url"`
+	JinaReaderURL       string `yaml:"jina_reader_url"`
 	MinTextChars        int    `yaml:"min_text_chars"`
 }
 
@@ -102,6 +104,12 @@ func LoadConfig(path string) error {
 	}
 	if cfg.Fulltext.MinTextChars == 0 {
 		cfg.Fulltext.MinTextChars = 200
+	}
+	if cfg.Fulltext.FallbackEngine == "" {
+		cfg.Fulltext.FallbackEngine = "jina"
+	}
+	if cfg.Fulltext.JinaReaderURL == "" {
+		cfg.Fulltext.JinaReaderURL = "https://r.jina.ai/"
 	}
 	if cfg.Classify.PromoteThreshold == 0 {
 		cfg.Classify.PromoteThreshold = 5

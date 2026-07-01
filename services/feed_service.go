@@ -50,17 +50,38 @@ func FetchAndExtractFulltext(url string) (string, string, string) {
 		log.Printf("[Extractor] Direct fetch failed for %s: %s", url, err)
 	}
 
-	// Try 2: Fallback to JS Rendering Service if configured
-	renderingURL := config.GlobalConfig.Fulltext.RenderingServiceURL
-	if renderingURL != "" {
-		log.Printf("[Extractor] Falling back to rendering service for URL: %s -> %s", url, renderingURL)
-		content, err = extractWithRenderingService(url, renderingURL)
+	// Try 2: Configured Fallback Engine
+	fallbackEngine := config.GlobalConfig.Fulltext.FallbackEngine
+	if fallbackEngine == "" {
+		fallbackEngine = "jina"
+	}
+
+	if fallbackEngine == "jina" {
+		jinaURL := config.GlobalConfig.Fulltext.JinaReaderURL
+		if jinaURL == "" {
+			jinaURL = "https://r.jina.ai/"
+		}
+		log.Printf("[Extractor] Falling back to Jina Reader for URL: %s -> %s", url, jinaURL)
+		content, err = extractWithJinaReader(url, jinaURL)
 		if err == nil && len(content) >= minChars {
-			log.Printf("[Extractor] Successfully extracted fulltext (%d chars) via rendering service", len(content))
-			return content, "ok", "rendering_service"
+			log.Printf("[Extractor] Successfully extracted fulltext (%d chars) via Jina Reader", len(content))
+			return content, "ok", "jina"
 		}
 		if err != nil {
-			log.Printf("[Extractor] Rendering service failed for %s: %s", url, err)
+			log.Printf("[Extractor] Jina Reader failed for %s: %s", url, err)
+		}
+	} else if fallbackEngine == "render_service" {
+		renderingURL := config.GlobalConfig.Fulltext.RenderingServiceURL
+		if renderingURL != "" {
+			log.Printf("[Extractor] Falling back to rendering service for URL: %s -> %s", url, renderingURL)
+			content, err = extractWithRenderingService(url, renderingURL)
+			if err == nil && len(content) >= minChars {
+				log.Printf("[Extractor] Successfully extracted fulltext (%d chars) via rendering service", len(content))
+				return content, "ok", "rendering_service"
+			}
+			if err != nil {
+				log.Printf("[Extractor] Rendering service failed for %s: %s", url, err)
+			}
 		}
 	}
 
@@ -190,6 +211,53 @@ func extractWithRenderingService(url, serviceURL string) (string, error) {
 	content := crud.CleanHTML(article.Content)
 	if isWafOrBlocked(content) {
 		return "", fmt.Errorf("extracted content contains WAF indicators")
+	}
+
+	return content, nil
+}
+
+func extractWithJinaReader(url, jinaURL string) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	if !strings.HasSuffix(jinaURL, "/") {
+		jinaURL += "/"
+	}
+	fullJinaURL := jinaURL + url
+
+	req, err := http.NewRequestWithContext(ctx, "GET", fullJinaURL, nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("Jina Reader returned HTTP %d", resp.StatusCode)
+	}
+
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", err
+	}
+	jinaText := string(bodyBytes)
+
+	var content string
+	if strings.Contains(jinaText, "Markdown Content:") {
+		parts := strings.SplitN(jinaText, "Markdown Content:", 2)
+		content = strings.TrimSpace(parts[1])
+	} else {
+		content = strings.TrimSpace(jinaText)
+	}
+
+	if isWafOrBlocked(content) {
+		return "", fmt.Errorf("Jina Reader response contains WAF indicators")
 	}
 
 	return content, nil
@@ -827,8 +895,9 @@ func GetEntryFulltext(entryID int) (map[string]interface{}, error) {
 		hasSummary = true
 	}
 
+	// 1. Try reading from cached fulltext (Fast Path)
 	ftRow, _ := crud.GetEntryFulltext(entryID)
-	if ftRow != nil && strings.TrimSpace(ftRow.Content) != "" {
+	if ftRow != nil && strings.TrimSpace(ftRow.Content) != "" && ftRow.Status == "ok" {
 		cleanLen := EstimateCleanTextLength(ftRow.Content)
 		return map[string]interface{}{
 			"content":          ftRow.Content,
@@ -838,6 +907,23 @@ func GetEntryFulltext(entryID int) (map[string]interface{}, error) {
 		}, nil
 	}
 
+	// 2. Cache missed or failed previously. Try self-healing: trigger single feed refresh (forcing reload)
+	_ = refreshSingleFeedInternal(entry.FeedID, true)
+
+	// Re-read the database to check if feed refresh successfully updated this entry
+	entry, _ = crud.GetEntryByID(entryID)
+	ftRow, _ = crud.GetEntryFulltext(entryID)
+	if ftRow != nil && strings.TrimSpace(ftRow.Content) != "" && ftRow.Status == "ok" {
+		cleanLen := EstimateCleanTextLength(ftRow.Content)
+		return map[string]interface{}{
+			"content":          ftRow.Content,
+			"status":           ftRow.Status,
+			"has_summary":      hasSummary,
+			"clean_char_count": cleanLen,
+		}, nil
+	}
+
+	// 3. Fall back to crawler scraper
 	var content, status, fetcher string
 	if entry.FulltextReady == 1 && strings.TrimSpace(entry.RawContent) != "" {
 		content = crud.CleanHTML(entry.RawContent)
@@ -861,6 +947,44 @@ func GetEntryFulltext(entryID int) (map[string]interface{}, error) {
 		"has_summary":      hasSummary,
 		"clean_char_count": cleanLen,
 	}, nil
+}
+
+func refreshSingleFeedInternal(feedID int, force bool) error {
+	feed, err := crud.GetFeedByID(feedID)
+	if err != nil || feed == nil || feed.Enabled == 0 {
+		return err
+	}
+
+	etag := feed.Etag
+	lastMod := feed.LastModified
+	if force {
+		etag = ""
+		lastMod = ""
+	}
+
+	result, err := FetchFeed(feed.URL, etag, lastMod)
+	if err != nil {
+		return err
+	}
+
+	if result.NotModified {
+		_ = EnsureFeedSeeded(feedID)
+		_ = crud.UpdateFeedFetchStatus(feedID, feed.Etag, feed.LastModified)
+		return nil
+	}
+
+	fetchedCount := len(result.Entries)
+	if fetchedCount > 0 {
+		defaultCatID, _ := crud.GetDefaultCategory(feedID)
+		_, err = crud.SaveEntries(feedID, result.Entries, defaultCatID)
+		_ = crud.UpdateFeedFetchStatus(feedID, result.Etag, result.LastModified)
+	} else {
+		_ = crud.UpdateFeedFetchStatus(feedID, result.Etag, result.LastModified)
+	}
+
+	_ = EnsureFeedSeeded(feedID)
+	ClassifyFeedEntries(feedID)
+	return nil
 }
 
 func EnsureFeedSeeded(feedID int) error {

@@ -18,7 +18,7 @@ var (
 	schedulerLock sync.Mutex
 )
 
-func RefreshSingleFeed(feedID int) (int, int, error) {
+func RefreshSingleFeed(feedID int, force bool) (int, int, error) {
 	feed, err := crud.GetFeedByID(feedID)
 	if err != nil || feed == nil || feed.Enabled == 0 {
 		return 0, 0, nil
@@ -26,7 +26,14 @@ func RefreshSingleFeed(feedID int) (int, int, error) {
 
 	log.Printf("[Scheduler] Refreshing feed %d: %s", feedID, feed.URL)
 
-	result, err := services.FetchFeed(feed.URL, feed.Etag, feed.LastModified)
+	etag := feed.Etag
+	lastMod := feed.LastModified
+	if force {
+		etag = ""
+		lastMod = ""
+	}
+
+	result, err := services.FetchFeed(feed.URL, etag, lastMod)
 	if err != nil {
 		log.Printf("[Scheduler] Failed to fetch feed %d (%s): %s", feedID, feed.URL, err)
 		return 0, 0, err
@@ -75,7 +82,7 @@ func RefreshAllFeeds() (int, int) {
 		if feed.Enabled == 0 {
 			continue
 		}
-		_, newCount, err := RefreshSingleFeed(feed.ID)
+		_, newCount, err := RefreshSingleFeed(feed.ID, false)
 		if err == nil {
 			totalNew += newCount
 			processed++
