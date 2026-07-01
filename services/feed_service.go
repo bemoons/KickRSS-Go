@@ -28,6 +28,11 @@ import (
 // --- Web Scraper (Readability) ---
 
 func FetchAndExtractFulltext(url string) (string, string, string) {
+	// Strip tracking query parameters for huxiu.com to prevent triggering WAF block rules
+	if strings.Contains(url, "huxiu.com") && strings.Contains(url, "?") {
+		url = strings.Split(url, "?")[0]
+	}
+
 	minChars := config.GlobalConfig.Fulltext.MinTextChars
 	if minChars == 0 {
 		minChars = 200
