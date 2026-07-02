@@ -43,9 +43,15 @@ func FetchAndExtractFulltext(url string) (string, string, string) {
 
 	// Try 1: Direct Fetch and Go-Readability extraction
 	content, err := extractDirect(url)
-	if err == nil && len(content) >= minChars {
-		log.Printf("[Extractor] Successfully extracted fulltext (%d chars) via direct fetch", len(content))
-		return content, "ok", "trafilatura" // Keep string compatible with python schema
+	if err == nil {
+		if content == "__VIDEO_ARTICLE__" {
+			log.Printf("[Extractor] Detected video page via direct HTML: %s", url)
+			return "此文章主要包含视频/多媒体内容，无正文可提取。请点击标题或右上角链接查看原始视频。", "video", "trafilatura"
+		}
+		if len(content) >= minChars {
+			log.Printf("[Extractor] Successfully extracted fulltext (%d chars) via direct fetch", len(content))
+			return content, "ok", "trafilatura"
+		}
 	}
 	if err != nil {
 		log.Printf("[Extractor] Direct fetch failed for %s: %s", url, err)
@@ -64,9 +70,15 @@ func FetchAndExtractFulltext(url string) (string, string, string) {
 		}
 		log.Printf("[Extractor] Falling back to Jina Reader for URL: %s -> %s", url, jinaURL)
 		content, err = extractWithJinaReader(url, jinaURL)
-		if err == nil && len(content) >= minChars {
-			log.Printf("[Extractor] Successfully extracted fulltext (%d chars) via Jina Reader", len(content))
-			return content, "ok", "jina"
+		if err == nil {
+			if isVideoPage(url, content) {
+				log.Printf("[Extractor] Detected video page via Jina response: %s", url)
+				return "此文章主要包含视频/多媒体内容，无正文可提取。请点击标题或右上角链接查看原始视频。", "video", "jina"
+			}
+			if len(content) >= minChars {
+				log.Printf("[Extractor] Successfully extracted fulltext (%d chars) via Jina Reader", len(content))
+				return content, "ok", "jina"
+			}
 		}
 		if err != nil {
 			log.Printf("[Extractor] Jina Reader failed for %s: %s", url, err)
@@ -76,9 +88,15 @@ func FetchAndExtractFulltext(url string) (string, string, string) {
 		if renderingURL != "" {
 			log.Printf("[Extractor] Falling back to rendering service for URL: %s -> %s", url, renderingURL)
 			content, err = extractWithRenderingService(url, renderingURL)
-			if err == nil && len(content) >= minChars {
-				log.Printf("[Extractor] Successfully extracted fulltext (%d chars) via rendering service", len(content))
-				return content, "ok", "rendering_service"
+			if err == nil {
+				if isVideoPage(url, content) {
+					log.Printf("[Extractor] Detected video page via rendering service response: %s", url)
+					return "此文章主要包含视频/多媒体内容，无正文可提取。请点击标题或右上角链接查看原始视频。", "video", "rendering_service"
+				}
+				if len(content) >= minChars {
+					log.Printf("[Extractor] Successfully extracted fulltext (%d chars) via rendering service", len(content))
+					return content, "ok", "rendering_service"
+				}
 			}
 			if err != nil {
 				log.Printf("[Extractor] Rendering service failed for %s: %s", url, err)
@@ -110,6 +128,43 @@ func isWafOrBlocked(html string) bool {
 	}
 	return false
 }
+
+func isVideoPage(url string, htmlOrMarkdown string) bool {
+	if htmlOrMarkdown == "" {
+		return false
+	}
+	lowerContent := strings.ToLower(htmlOrMarkdown)
+
+	// Direct HTML metadata and class checks
+	if strings.Contains(htmlOrMarkdown, `articleSection":"视频"`) ||
+		strings.Contains(htmlOrMarkdown, `is_video_article":true`) ||
+		strings.Contains(htmlOrMarkdown, `is_video_article":1`) ||
+		strings.Contains(htmlOrMarkdown, `class="article__top-video"`) ||
+		strings.Contains(htmlOrMarkdown, `class="video-player-container"`) ||
+		strings.Contains(htmlOrMarkdown, `property="og:type" content="video"`) ||
+		strings.Contains(htmlOrMarkdown, `property="og:type" content="video.other"`) {
+		return true
+	}
+
+	// Markdown / General URL / CDN checks
+	if strings.Contains(url, "huxiu.com") {
+		if strings.Contains(lowerContent, "s2-video.huxiucdn.com") ||
+			strings.Contains(lowerContent, "v2-video.huxiucdn.com") ||
+			strings.Contains(lowerContent, "[video ") {
+			return true
+		}
+	}
+
+	// General third-party embeds
+	if strings.Contains(lowerContent, "player.bilibili.com") ||
+		strings.Contains(lowerContent, "youtube.com/embed") ||
+		strings.Contains(lowerContent, "player.vimeo.com") {
+		return true
+	}
+
+	return false
+}
+
 
 func newSafeHTTPClient() *http.Client {
 	dialer := &net.Dialer{
@@ -164,6 +219,10 @@ func extractDirect(url string) (string, error) {
 	bodyStr := string(bodyBytes)
 	if isWafOrBlocked(bodyStr) {
 		return "", fmt.Errorf("direct fetch response hit WAF block page")
+	}
+
+	if isVideoPage(url, bodyStr) {
+		return "__VIDEO_ARTICLE__", nil
 	}
 
 	parsedURL, errURL := neturl.Parse(url)
@@ -922,7 +981,7 @@ func GetEntryFulltext(entryID int) (map[string]interface{}, error) {
 
 	// 1. Try reading from cached fulltext (Fast Path)
 	ftRow, _ := crud.GetEntryFulltext(entryID)
-	if ftRow != nil && strings.TrimSpace(ftRow.Content) != "" && ftRow.Status == "ok" {
+	if ftRow != nil && strings.TrimSpace(ftRow.Content) != "" && (ftRow.Status == "ok" || ftRow.Status == "video") {
 		cleanLen := EstimateCleanTextLength(ftRow.Content)
 		return map[string]interface{}{
 			"content":          ftRow.Content,
@@ -958,7 +1017,7 @@ func GetEntryFulltext(entryID int) (map[string]interface{}, error) {
 	// Re-read the database to check if feed refresh successfully updated this entry
 	entry, _ = crud.GetEntryByID(entryID)
 	ftRow, _ = crud.GetEntryFulltext(entryID)
-	if ftRow != nil && strings.TrimSpace(ftRow.Content) != "" && ftRow.Status == "ok" {
+	if ftRow != nil && strings.TrimSpace(ftRow.Content) != "" && (ftRow.Status == "ok" || ftRow.Status == "video") {
 		cleanLen := EstimateCleanTextLength(ftRow.Content)
 		return map[string]interface{}{
 			"content":          ftRow.Content,

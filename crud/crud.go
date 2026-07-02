@@ -618,6 +618,8 @@ func SaveFulltext(entryID int, content, status, fetcher string) error {
 	// Also mark fulltext_ready in entries (and clear likely_no_text if status is ok)
 	if status == "ok" {
 		_, err = db.DB.Exec("UPDATE entries SET fulltext_ready = 1, likely_no_text = 0 WHERE id = ?", entryID)
+	} else if status == "video" {
+		_, err = db.DB.Exec("UPDATE entries SET fulltext_ready = 1, likely_no_text = 1 WHERE id = ?", entryID)
 	} else {
 		_, err = db.DB.Exec("UPDATE entries SET fulltext_ready = 0 WHERE id = ?", entryID)
 	}
