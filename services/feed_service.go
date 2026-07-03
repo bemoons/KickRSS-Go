@@ -765,6 +765,14 @@ func SyncResetFeedCategoriesStep1(feedID int) (bool, error) {
 	return seededVal == 1, err
 }
 
+var (
+	classificationMu       sync.Mutex
+	runningClassifications = make(map[int]bool)
+
+	pregenMu       sync.Mutex
+	runningPregens = make(map[int]bool)
+)
+
 func AsyncResetFeedCategories(feedID int) {
 	log.Printf("[FeedService] Starting async reset categories for feed %d", feedID)
 	_, err := SyncResetFeedCategoriesStep1(feedID)
@@ -776,6 +784,21 @@ func AsyncResetFeedCategories(feedID int) {
 }
 
 func ClassifyFeedEntries(feedID int) {
+	classificationMu.Lock()
+	if runningClassifications[feedID] {
+		classificationMu.Unlock()
+		log.Printf("[Classifier] Classification for feed %d is already running. Skipping duplicate run.", feedID)
+		return
+	}
+	runningClassifications[feedID] = true
+	classificationMu.Unlock()
+
+	defer func() {
+		classificationMu.Lock()
+		delete(runningClassifications, feedID)
+		classificationMu.Unlock()
+	}()
+
 	log.Printf("[Classifier] Starting classification for feed %d", feedID)
 
 	feed, err := crud.GetFeedByID(feedID)
@@ -900,6 +923,21 @@ func ClassifyFeedEntries(feedID int) {
 }
 
 func PregenerateSummariesForFeed(feedID int) {
+	pregenMu.Lock()
+	if runningPregens[feedID] {
+		pregenMu.Unlock()
+		log.Printf("[SummaryPre] Summary pregeneration for feed %d is already running. Skipping duplicate run.", feedID)
+		return
+	}
+	runningPregens[feedID] = true
+	pregenMu.Unlock()
+
+	defer func() {
+		pregenMu.Lock()
+		delete(runningPregens, feedID)
+		pregenMu.Unlock()
+	}()
+
 	log.Printf("[SummaryPre] Checking summaries to pregenerate for feed %d", feedID)
 
 	query := `
@@ -909,6 +947,8 @@ func PregenerateSummariesForFeed(feedID int) {
 		LEFT JOIN summaries s ON s.entry_id = e.id
 		WHERE e.feed_id = ? AND e.attention = 'read' AND e.fulltext_ready = 1
 		  AND ft.status = 'ok' AND s.entry_id IS NULL
+		ORDER BY e.published_at DESC
+		LIMIT 5
 	`
 	rows, err := db.DB.Query(query, feedID)
 	if err != nil {

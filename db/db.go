@@ -175,6 +175,7 @@ func InitDB() error {
 		return err
 	}
 
+	db.SetMaxOpenConns(1)
 	DB = db
 	return nil
 }

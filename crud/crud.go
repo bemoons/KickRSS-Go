@@ -393,6 +393,7 @@ func GetUnclassifiedEntries(feedID int) ([]models.Entry, error) {
 		FROM entries
 		WHERE feed_id = ? AND classified_at IS NULL
 		ORDER BY published_at DESC
+		LIMIT 100
 	`
 	rows, err := db.DB.Query(query, feedID)
 	if err != nil {
