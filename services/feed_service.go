@@ -440,13 +440,32 @@ func FetchFeed(url string, etag, lastModified string) (*FetchResult, error) {
 			author = item.Authors[0].Name
 		}
 
+		isTypeVideo := false
+		if extensions, ok := item.Extensions[""]; ok {
+			if typeExtensions, ok := extensions["type"]; ok && len(typeExtensions) > 0 {
+				typeVal := typeExtensions[0].Value
+				if typeVal == "video_article" || typeVal == "video" {
+					isTypeVideo = true
+				}
+			}
+		}
+
+		likelyNoText := 0
+		fulltextReady := 0
+		if isTypeVideo {
+			likelyNoText = 1
+			fulltextReady = 1
+		}
+
 		entries = append(entries, models.Entry{
-			Guid:        guid,
-			Title:       item.Title,
-			URL:         item.Link,
-			Author:      author,
-			PublishedAt: pubDate,
-			RawContent:  content,
+			Guid:          guid,
+			Title:         item.Title,
+			URL:           item.Link,
+			Author:        author,
+			PublishedAt:   pubDate,
+			RawContent:    content,
+			LikelyNoText:  likelyNoText,
+			FulltextReady: fulltextReady,
 		})
 	}
 

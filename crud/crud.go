@@ -319,16 +319,17 @@ func SaveEntries(feedID int, rawEntries []models.Entry, defaultCatID int) (int, 
 		var existingFulltextReady int
 		errCheck := stmtCheck.QueryRow(feedID, re.Guid).Scan(&existingID, &existingRawContent, &existingFulltextReady)
 		if errCheck == sql.ErrNoRows {
-			// Determine if likely no text
-			likelyNoText := 0
-			if len(re.RawContent) < 200 {
-				likelyNoText = 1
-			}
-			
-			// If feed already has long text, mark fulltext_ready=1
-			fulltextReady := 0
-			if len(re.RawContent) > 800 {
-				fulltextReady = 1
+			likelyNoText := re.LikelyNoText
+			fulltextReady := re.FulltextReady
+
+			// Fallback to legacy heuristic if not preset
+			if likelyNoText == 0 && fulltextReady == 0 {
+				if len(re.RawContent) < 200 {
+					likelyNoText = 1
+				}
+				if len(re.RawContent) > 800 {
+					fulltextReady = 1
+				}
 			}
 
 			pubTime := re.PublishedAt
@@ -336,11 +337,18 @@ func SaveEntries(feedID int, rawEntries []models.Entry, defaultCatID int) (int, 
 				pubTime = now
 			}
 
-			_, err = stmtInsert.Exec(feedID, defaultCatID, re.Guid, re.Title, re.URL, re.Author, pubTime, now, re.RawContent, likelyNoText, fulltextReady)
+			resInsert, err := stmtInsert.Exec(feedID, defaultCatID, re.Guid, re.Title, re.URL, re.Author, pubTime, now, re.RawContent, likelyNoText, fulltextReady)
 			if err != nil {
 				return 0, err
 			}
 			newCount++
+
+			if likelyNoText == 1 && fulltextReady == 1 {
+				entryID, errID := resInsert.LastInsertId()
+				if errID == nil {
+					_, _ = tx.Exec("INSERT INTO fulltext (entry_id, content, status, fetched_at, fetcher) VALUES (?, '此文章主要包含视频/多媒体内容，无正文可提取。请点击标题或右上角链接查看原始视频。', 'video', ?, 'feed')", entryID, now)
+				}
+			}
 		} else if errCheck == nil {
 			// Self-healing: If existing content lacks fulltext and feed has updated with longer text, update it
 			if existingFulltextReady == 0 && len(re.RawContent) > len(existingRawContent) {
