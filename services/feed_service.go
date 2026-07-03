@@ -34,6 +34,11 @@ func FetchAndExtractFulltext(url string) (string, string, string) {
 		url = strings.Split(url, "?")[0]
 	}
 
+	if isVideoURL(url) {
+		log.Printf("[Extractor] Detected video page via URL pattern: %s", url)
+		return "此文章主要包含视频/多媒体内容，无正文可提取。请点击标题或右上角链接查看原始视频。", "video", "trafilatura"
+	}
+
 	minChars := config.GlobalConfig.Fulltext.MinTextChars
 	if minChars == 0 {
 		minChars = 200
@@ -165,6 +170,14 @@ func isVideoPage(url string, htmlOrMarkdown string) bool {
 	return false
 }
 
+func isVideoURL(url string) bool {
+	lowerURL := strings.ToLower(url)
+	return strings.Contains(lowerURL, "youtube.com/watch") ||
+		strings.Contains(lowerURL, "youtu.be/") ||
+		strings.Contains(lowerURL, "bilibili.com/video/") ||
+		strings.Contains(lowerURL, "v.qq.com/x/page/") ||
+		strings.Contains(lowerURL, "v.qq.com/x/cover/")
+}
 
 func newSafeHTTPClient() *http.Client {
 	dialer := &net.Dialer{
