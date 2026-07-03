@@ -164,6 +164,10 @@ func InitDB() error {
 		db.Close()
 		return err
 	}
+	if _, err := db.Exec("PRAGMA busy_timeout = 5000;"); err != nil {
+		db.Close()
+		return err
+	}
 
 	if _, err := db.Exec(SCHEMA); err != nil {
 		db.Close()
@@ -175,7 +179,7 @@ func InitDB() error {
 		return err
 	}
 
-	db.SetMaxOpenConns(1)
+	db.SetMaxOpenConns(100)
 	DB = db
 	return nil
 }
