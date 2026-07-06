@@ -15,7 +15,8 @@ type AIConfigDetail struct {
 	BatchSize      int    `yaml:"batch_size"`
 	MaxConcurrency int    `yaml:"max_concurrency"`
 	MaxTokens      *int   `yaml:"max_tokens"`
-	UseReasoning   *bool  `yaml:"use_reasoning"`
+	UseReasoning      *bool  `yaml:"use_reasoning"`
+	ReasoningDisabler string `yaml:"reasoning_disabler"`
 }
 
 type AITasks struct {
@@ -195,27 +196,28 @@ func GetAIConfig(taskName string, summaryLength ...string) AIConfigDetail {
 		var computedMaxTokens int
 		if isNumeric {
 			computedMaxTokens = targetNum * 3
-			if computedMaxTokens < 1000 {
-				computedMaxTokens = 1000
+			if computedMaxTokens < 1500 {
+				computedMaxTokens = 1500
 			}
 		} else if lenVal == "short" {
-			computedMaxTokens = 300
-		} else if lenVal == "long" {
-			computedMaxTokens = 1000
-		} else {
 			computedMaxTokens = 500
+		} else if lenVal == "long" {
+			computedMaxTokens = 2000
+		} else {
+			computedMaxTokens = 1200
 		}
 		maxTokens = &computedMaxTokens
 	}
 
 	res := AIConfigDetail{
-		BaseURL:        taskCfg.BaseURL,
-		APIKey:         taskCfg.APIKey,
-		Model:          taskCfg.Model,
-		BatchSize:      taskCfg.BatchSize,
-		MaxConcurrency: taskCfg.MaxConcurrency,
-		MaxTokens:      maxTokens,
-		UseReasoning:   taskCfg.UseReasoning,
+		BaseURL:           taskCfg.BaseURL,
+		APIKey:            taskCfg.APIKey,
+		Model:             taskCfg.Model,
+		BatchSize:         taskCfg.BatchSize,
+		MaxConcurrency:    taskCfg.MaxConcurrency,
+		MaxTokens:         maxTokens,
+		UseReasoning:      taskCfg.UseReasoning,
+		ReasoningDisabler: taskCfg.ReasoningDisabler,
 	}
 
 	if res.BaseURL == "" {
@@ -232,6 +234,12 @@ func GetAIConfig(taskName string, summaryLength ...string) AIConfigDetail {
 	}
 	if res.Model == "" {
 		res.Model = "qwen-local"
+	}
+	if res.ReasoningDisabler == "" {
+		res.ReasoningDisabler = def.ReasoningDisabler
+	}
+	if res.ReasoningDisabler == "" {
+		res.ReasoningDisabler = "auto"
 	}
 	if res.BatchSize == 0 {
 		res.BatchSize = 25

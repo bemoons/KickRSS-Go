@@ -6,6 +6,7 @@ ai:
     base_url: http://localhost:9999/v1
     api_key: your_api_key_here
     model: qwen-local
+    reasoning_disabler: auto # Options: auto, vllm, deepseek, gemini, ollama, none
   tasks:
     classify:
       batch_size: 25

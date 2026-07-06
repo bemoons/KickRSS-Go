@@ -109,7 +109,7 @@ func CallChatCompletion(messages []ChatMessage, taskName string, responseFormatJ
 
 	// Append reasoning disablers if not chat task OR if reasoning is disabled
 	if taskName != "chat" || (cfg.UseReasoning != nil && !*cfg.UseReasoning) {
-		AppendReasoningDisabler(&reqBody, cfg.Model, cfg.BaseURL)
+		AppendReasoningDisabler(&reqBody, cfg.Model, cfg.BaseURL, cfg.ReasoningDisabler)
 	}
 
 	jsonBytes, err := json.Marshal(reqBody)
@@ -245,7 +245,7 @@ func CallChatCompletionStream(ctx context.Context, messages []ChatMessage, taskN
 
 	// Append reasoning disablers if not chat task OR if reasoning is disabled
 	if taskName != "chat" || (cfg.UseReasoning != nil && !*cfg.UseReasoning) {
-		AppendReasoningDisabler(&reqBody, cfg.Model, cfg.BaseURL)
+		AppendReasoningDisabler(&reqBody, cfg.Model, cfg.BaseURL, cfg.ReasoningDisabler)
 	}
 
 	jsonBytes, err := json.Marshal(reqBody)
@@ -1320,14 +1320,44 @@ func IsReasoningModel(model string) bool {
 		strings.Contains(m, "qwen") ||
 		strings.Contains(m, "3.6") ||
 		strings.Contains(m, "3.5") ||
-		strings.Contains(m, "a3b")
+		strings.Contains(m, "a3b") ||
+		strings.Contains(m, "ornith")
 }
 
-func AppendReasoningDisabler(req *ChatCompletionRequest, model string, baseURL string) {
+func AppendReasoningDisabler(req *ChatCompletionRequest, model string, baseURL string, disablerFormat string) {
 	m := strings.ToLower(model)
 	url := strings.ToLower(baseURL)
+	fmtVal := strings.ToLower(disablerFormat)
+	if fmtVal == "" {
+		fmtVal = "auto"
+	}
 	falseVal := false
 	
+	// 1. Explicit disabler format specified by user config
+	if fmtVal == "vllm" {
+		req.ChatTemplateKwargs = map[string]interface{}{
+			"enable_thinking": false,
+		}
+		req.EnableThinking = &falseVal
+		return
+	} else if fmtVal == "deepseek" {
+		req.Thinking = map[string]interface{}{
+			"type": "disabled",
+		}
+		return
+	} else if fmtVal == "gemini" {
+		req.ThinkingConfig = map[string]interface{}{
+			"thinking_budget": 0,
+		}
+		return
+	} else if fmtVal == "ollama" {
+		req.Think = &falseVal
+		return
+	} else if fmtVal == "none" {
+		return
+	}
+	
+	// 2. Default Auto-matching
 	// Gemini
 	if strings.Contains(m, "gemini") || strings.Contains(url, "googleapis.com") {
 		req.ThinkingConfig = map[string]interface{}{
@@ -1357,6 +1387,26 @@ func AppendReasoningDisabler(req *ChatCompletionRequest, model string, baseURL s
 			"enable_thinking": false,
 		}
 		req.EnableThinking = &falseVal
+		return
+	}
+	
+	// Unknown model: Check if it's NOT a known standard non-reasoning model (like GPT/Claude)
+	nonReasoningKeywords := []string{"gpt-4", "gpt-3.5", "claude", "gemini-1.5", "mixtral", "llama-3-", "llama-3.1-", "llama-3.2-"}
+	isNonReasoning := false
+	for _, kw := range nonReasoningKeywords {
+		if strings.Contains(m, kw) {
+			isNonReasoning = true
+			break
+		}
+	}
+	
+	if !isNonReasoning {
+		// Apply hybrid vLLM + Ollama disabler
+		req.ChatTemplateKwargs = map[string]interface{}{
+			"enable_thinking": false,
+		}
+		req.EnableThinking = &falseVal
+		req.Think = &falseVal
 	}
 }
 
@@ -1369,7 +1419,7 @@ func TestLLMReasoning(apiBaseURL, apiKey, model string) (string, string, error) 
 			{Role: "user", Content: "Please respond with exactly one word 'hello' and absolutely nothing else."},
 		},
 	}
-	AppendReasoningDisabler(&reqBody, model, apiBaseURL)
+	AppendReasoningDisabler(&reqBody, model, apiBaseURL, "auto")
 	
 	jsonBytes, err := json.Marshal(reqBody)
 	if err != nil {
