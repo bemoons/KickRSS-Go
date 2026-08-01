@@ -469,20 +469,20 @@ func GetSummaryMessages(title, url, content string, length interface{}, summaryL
 	if isNumericLength {
 		lengthDesc = fmt.Sprintf("proportional summary targeting approximately %d Chinese characters (around 1/10 of the clean text length)", targetChars)
 
-		if targetChars >= 600 {
-			structureAdvice = fmt.Sprintf("- For this length (%d characters), write a highly detailed, multi-paragraph, and structured summary. Break down the content into sections such as: Background/Context, Core Arguments/Key Points (explained with detail and evidence), Key Data/Findings, and Implications/Conclusions. Include specific examples, names, and numbers from the text to ensure depth and meet the length requirement.", targetChars)
-			cnStructureAdvice = fmt.Sprintf("针对当前较长的目标字数（大约 %d 字），你必须撰写一份结构清晰、内容饱满的深度长摘要。部分观点需要展开论述，请分成多个段落进行详细论述，包含：背景与前言、核心观点与详细论据展开、关键数据或案例细节、总结与影响。请多写细节、逻辑展开，严禁三言两语草草了事，以确保字数足够饱满。", targetChars)
-		} else if targetChars >= 300 {
-			structureAdvice = fmt.Sprintf("- For this length (%d characters), write a detailed summary containing 2-3 structured paragraphs or 5-8 detailed bullet points. Ensure core takeaways and their supporting points are fully explained.", targetChars)
-			cnStructureAdvice = fmt.Sprintf("针对当前中等目标字数（大约 %d 字），请撰写 2-3 个结构完整的段落，或者 5-8 个含有详细解释的要点。确保把核心事实、论据 and 结论表述清楚。", targetChars)
+		if targetChars >= 400 {
+			structureAdvice = fmt.Sprintf("- For this length (%d characters), write a structured summary containing 4-6 informative bullet points. Be concise, clear, and highlight key takeaways without fluff.", targetChars)
+			cnStructureAdvice = fmt.Sprintf("针对当前目标字数（大约 %d 字），请撰写 4-6 个高度凝练的核心要点。表述需客观精炼，严禁赘述或盲目扩写。", targetChars)
+		} else if targetChars >= 250 {
+			structureAdvice = fmt.Sprintf("- For this length (%d characters), write a concise summary containing 3-5 bullet points.", targetChars)
+			cnStructureAdvice = fmt.Sprintf("针对当前目标字数（大约 %d 字），请撰写 3-5 个精炼核心要点。", targetChars)
 		} else {
-			structureAdvice = fmt.Sprintf("- For this length (%d characters), write a concise summary containing 1-2 paragraphs or 3-5 bullet points.", targetChars)
-			cnStructureAdvice = fmt.Sprintf("针对当前简短的目标字数（大约 %d 字），请撰写 1-2 个精炼的段落，或者 3-5 个核心要点。", targetChars)
+			structureAdvice = fmt.Sprintf("- For this length (%d characters), write a brief summary containing 2-3 bullet points.", targetChars)
+			cnStructureAdvice = fmt.Sprintf("针对当前简短的目标字数（大约 %d 字），请撰写 2-3 个极简核心要点。", targetChars)
 		}
 
 		ruleDesc = fmt.Sprintf("The summary should be high-quality, cover key takeaways, and strictly target approximately %d Chinese characters.\n"+
-			"- CRITICAL: The generated summary MUST contain around %d Chinese characters. DO NOT make it too short. The target length is strictly %d characters.\n"+
-			"- %s", targetChars, targetChars, targetChars, structureAdvice)
+			"- CRITICAL: The generated summary MUST target around %d Chinese characters and MUST NOT exceed %d characters.\n"+
+			"- %s", targetChars, targetChars, int(float64(targetChars)*1.2), structureAdvice)
 	} else if lengthStr == "short" {
 		lengthDesc = "short and concise summary (typically 3 bullet points or 1 paragraph, around 150-200 characters for the summary)"
 		ruleDesc = "The summary should be very brief and focus only on the most important takeaway."
@@ -506,9 +506,9 @@ func GetSummaryMessages(title, url, content string, length interface{}, summaryL
 				"- 必须且只能使用 %s (%s) 撰写 SUMMARY 部分，绝对不要使用原文语言来写摘要。", engName, localName, chnName, localName)
 
 			if isNumericLength {
-				langRule += fmt.Sprintf("\n- 必须写满大约 %d 个汉字（字数范围必须严格控制在 %d 到 %d 字之间）。\n"+
-					"- 这是字数的硬性指令，请把观点铺开、细节写饱满，绝对不能偷懒缩短！\n"+
-					"- 编写要求：%s", targetChars, int(float64(targetChars)*0.9), int(float64(targetChars)*1.15), cnStructureAdvice)
+				langRule += fmt.Sprintf("\n- 【字数硬性上限】：摘要总字数必须控制在大约 %d 个汉字左右（建议控制在 %d 到 %d 字以内），绝对严禁超过 %d 字！\n"+
+					"- 请做到言简意赅、高度提炼，切勿冗长赘述。\n"+
+					"- 编写要求：%s", targetChars, int(float64(targetChars)*0.8), int(float64(targetChars)*1.15), int(float64(targetChars)*1.2), cnStructureAdvice)
 			}
 			reminder = fmt.Sprintf("\n\nReminder: You MUST write the SUMMARY in %s (%s). (提示：请务必且只能使用 %s / %s 撰写摘要。)", engName, localName, chnName, localName)
 		} else {
