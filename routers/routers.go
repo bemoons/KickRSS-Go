@@ -743,8 +743,8 @@ func getEntrySummary(c *gin.Context) {
 	if targetChars < 100 {
 		targetChars = 100
 	}
-	if targetChars > 500 {
-		targetChars = 500
+	if targetChars > 1000 {
+		targetChars = 1000
 	}
 
 	if stream {
