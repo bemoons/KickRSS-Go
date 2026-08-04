@@ -248,8 +248,53 @@ func BuildUserInterestProfile() error {
 		})
 	}
 
-	if len(engagementList) < 15 {
-		log.Printf("[Maintenance] Not enough engagement data (%d articles < 15). Skipping LLM interest profile builder.", len(engagementList))
+	if len(engagementList) < 5 {
+		fallbackQuery := `
+			SELECT
+				e.id AS entry_id,
+				e.title,
+				'' AS ai_attention,
+				e.published_at,
+				f.title AS feed_name,
+				60000 AS active_dwell_ms,
+				0.8 AS scrolled_pct,
+				1 AS scrolled_to_bottom,
+				0 AS opened_original,
+				0 AS favorited,
+				'read' AS manual_bump
+			FROM entries e
+			JOIN feeds f ON f.id = e.feed_id
+			ORDER BY e.fetched_at DESC
+			LIMIT 50
+		`
+		fbRows, fbErr := db.DB.Query(fallbackQuery)
+		if fbErr == nil {
+			defer fbRows.Close()
+			for fbRows.Next() {
+				var entryID, activeDwellMs, scrolledToBottom, openedOriginal, favorited int
+				var title, aiAttention, publishedAt, feedName, bumpVal string
+				var scrolledPct float64
+				if err := fbRows.Scan(&entryID, &title, &aiAttention, &publishedAt, &feedName, &activeDwellMs, &scrolledPct, &scrolledToBottom, &openedOriginal, &favorited, &bumpVal); err == nil {
+					engagementList = append(engagementList, map[string]interface{}{
+						"entry_id":           entryID,
+						"title":              title,
+						"ai_attention":       aiAttention,
+						"published_at":       publishedAt,
+						"feed_name":          feedName,
+						"active_dwell_ms":    activeDwellMs,
+						"scrolled_pct":       scrolledPct,
+						"scrolled_to_bottom": scrolledToBottom,
+						"opened_original":    openedOriginal,
+						"favorited":          favorited,
+						"manual_bump":        bumpVal,
+					})
+				}
+			}
+		}
+	}
+
+	if len(engagementList) == 0 {
+		log.Printf("[Maintenance] Cold start: no engagement or entries data. Skipping LLM interest profile builder.")
 		return nil
 	}
 

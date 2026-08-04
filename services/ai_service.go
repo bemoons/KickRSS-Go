@@ -869,7 +869,7 @@ func AggregateUserInterestsSnapshot(engagementList []map[string]interface{}) (*U
     {"topic": "主题名称", "description": "一句话描述"}
   ],
   "attention_guide": "一段自然语言，50-120字，概括用户的整体阅读倾向，供分类器参考。格式示例：'用户高度关注XX and XX方向，尤其是涉及XX的内容应标为read；对XX and XX类内容兴趣较低，可标为glance。'",
-  "concentration_note": "如果 high_interest 中超过半数主题集中在同一领域，请严格以【%s】的专属文风（%s），撰写一句充满黑色幽默、犀利毒舌且符合其人格特征的调侃格言（30-70字），无情地嘲讽用户深陷的信息茧房。句末必须严格附上署名 '%s'。若主题分布均衡则设为 null"
+  "concentration_note": "请必须严格以【%s】的专属文风（%s），撰写一句充满黑色幽默、犀利毒舌且符合其人格特征的调侃格言（30-70字），无情而一针见血地点评用户的整体阅读偏好与信息茧房。句末必须严格附上署名 '%s'。"
 }
 
 要求：
