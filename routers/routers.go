@@ -121,6 +121,7 @@ func SetupRouter() *gin.Engine {
 
 	// Profile & Health Routes
 	r.GET("/profile/interests", getInterestProfile)
+	r.POST("/profile/generate", generateInterestProfile)
 	r.GET("/profile/topic-detail", getTopicDetail)
 	r.GET("/healthz", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"ok": true})
@@ -1324,6 +1325,20 @@ func getTopicDetail(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, detail)
+}
+
+func generateInterestProfile(c *gin.Context) {
+	if !config.GlobalConfig.InterestProfileEnabled {
+		c.JSON(http.StatusBadRequest, gin.H{"detail": "Personalization profile is disabled"})
+		return
+	}
+
+	if err := services.BuildUserInterestProfile(); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"detail": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"status": "success", "message": "阅读画像更新完成"})
 }
 
 func getCategoryEntries(c *gin.Context) {
