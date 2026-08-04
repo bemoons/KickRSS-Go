@@ -834,6 +834,26 @@ func AggregateUserInterestsSnapshot(engagementList []map[string]interface{}) (*U
 		lowText = buf.String()
 	}
 
+	dayOrdinal := time.Now().YearDay()
+	type Persona struct {
+		Name      string
+		Signature string
+		Style     string
+	}
+	personas := []Persona{
+		{Name: "奥斯卡·王尔德 (Oscar Wilde)", Signature: "--- 0sc4r W1LD3", Style: "唯美悖论、傲娇冷艳：“一个人摆脱无知的唯一方式，就是用机器的智慧来替代自己的思考...”"},
+		{Name: "鲁迅", Signature: "--- 鲁-fast", Style: "冷嘲热讽、看客批判的白话杂文风：“我向来是不惮以最坏的恶意，来推测茧房里的读者的...”"},
+		{Name: "亚瑟·叔本华 (Arthur Schopenhauer)", Signature: "--- 5ch0p3nh4u3r", Style: "极致厌世、悲观冷酷的哲理分析：“平庸的人思考如何消磨时间，你却葬送在资讯废纸堆里...”"},
+		{Name: "乔治·奥威尔 (George Orwell)", Signature: "--- 0rw3ll-1984", Style: "反乌托邦、算法监控与茧房控制讽刺：“在算法统治的时代，茧房即是真理，同质即是自由...”"},
+		{Name: "王朔", Signature: "--- 王-sure", Style: "京味顽主、痞子文学、玩世不恭：“玩的就是心跳！天天抱着这几块料当宝贝看，装什么深刻呢？”"},
+		{Name: "王小波", Signature: "--- Wavelet.王", Style: "特立独行、浪漫自嘲、一只特立独行的猪视角：“生活就是个缓慢受锤的过程，而你被锤的方式就是按时被资讯驯养...”"},
+		{Name: "萧伯纳 (George Bernard Shaw)", Signature: "--- 伯纳-削", Style: "剧作家毒舌、冷酷犀利、幽默刺痛：“人生有两大悲剧，一个是得不到，另一个是得到了这些无聊资讯...”"},
+		{Name: "尼采 (Friedrich Nietzsche)", Signature: "--- 尼爱采不采", Style: "狂人警句、深渊凝视、酒神反叛：“当你在深渊里刷着新闻，深渊也在刷着你。这些真理你爱采不采...”"},
+		{Name: "马克·吐温 (Mark Twain)", Signature: "--- mark 臀", Style: "美式下三路粗鄙狂放幽默、接地气爆讽：“这满屏的资讯就像老牛仔擦过屁股的草纸，又臭又硬...”"},
+		{Name: "老舍", Signature: "--- 老被夺舍", Style: "京味卖惨幽默、自嘲辛酸、骆驼祥子式自嘲：“这日子没法过了！我这脑瓜子天天被这几样新闻轮番夺舍...”"},
+	}
+	currPersona := personas[dayOrdinal%len(personas)]
+
 	prompt := fmt.Sprintf(`你是一个用户阅读行为分析助手。以下是某用户近30天的RSS阅读记录。
 
 ## 用户高度关注的文章（长时间阅读、滚动到底、收藏、查看原文、手动提升注意力）
@@ -849,7 +869,7 @@ func AggregateUserInterestsSnapshot(engagementList []map[string]interface{}) (*U
     {"topic": "主题名称", "description": "一句话描述"}
   ],
   "attention_guide": "一段自然语言，50-120字，概括用户的整体阅读倾向，供分类器参考。格式示例：'用户高度关注XX and XX方向，尤其是涉及XX的内容应标为read；对XX and XX类内容兴趣较低，可标为glance。'",
-  "concentration_note": "如果 high_interest 中超过半数主题属于同一领域，输出一句带黑色幽默、毒舌、戏谑又一针见血的调侃，无情揭露用户偏科的信息茧房（30-60字），语气要傲娇或犀利，否则设为 null"
+  "concentration_note": "如果 high_interest 中超过半数主题集中在同一领域，请严格以【%s】的专属文风（%s），撰写一句充满黑色幽默、犀利毒舌且符合其人格特征的调侃格言（30-70字），无情地嘲讽用户深陷的信息茧房。句末必须严格附上署名 '%s'。若主题分布均衡则设为 null"
 }
 
 要求：
@@ -857,7 +877,7 @@ func AggregateUserInterestsSnapshot(engagementList []map[string]interface{}) (*U
 - low_interest 提取 2-5 个主题
 - 主题应跨订阅源归纳，不要按订阅源罗列
 - 如果某类文章高参与和低参与中都有，说明用户对该主题的子方向有选择性，请在 description 中体现
-- attention_guide 必须具体到可操作，不要说"用户关注科技"这种空话`, highText, lowText)
+- attention_guide 必须具体到可操作，不要说"用户关注科技"这种空话`, highText, lowText, currPersona.Name, currPersona.Style, currPersona.Signature)
 
 	messages := []ChatMessage{
 		{Role: "system", Content: "You are a helpful reading behavior analyst."},
