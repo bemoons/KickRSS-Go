@@ -884,16 +884,43 @@ func AggregateUserInterestsSnapshot(engagementList []map[string]interface{}) (*U
 		{Role: "user", Content: prompt},
 	}
 
+	fallbackNote := fmt.Sprintf("%s %s", currPersona.Style, currPersona.Signature)
 	content, err := CallChatCompletion(messages, "profile", true)
 	if err != nil {
-		return nil, err
+		log.Printf("[AI] LLM call failed for interest profile builder (%s). Using persona fallback snapshot.", err)
+		return &UserInterestSnapshot{
+			HighInterest: []map[string]interface{}{
+				{"topic": "日常深度阅读", "description": "高频关注的RSS订阅源内容", "strength": "high"},
+			},
+			LowInterest: []map[string]interface{}{
+				{"topic": "常规新闻", "description": "快速跳过的内容"},
+			},
+			AttentionGuide:    "用户倾向于关注高价值资讯，对通俗新闻互动较低。",
+			ConcentrationNote: &fallbackNote,
+		}, nil
 	}
 
 	cleaned := cleanJSONString(content)
 	var snapshot UserInterestSnapshot
 	if err := json.Unmarshal([]byte(cleaned), &snapshot); err != nil {
 		log.Printf("[AI] Failed to parse user interest profile JSON: %s. Raw: %s", err, content)
-		return nil, err
+		return &UserInterestSnapshot{
+			HighInterest: []map[string]interface{}{
+				{"topic": "日常深度阅读", "description": "高频关注的RSS订阅源内容", "strength": "high"},
+			},
+			LowInterest: []map[string]interface{}{
+				{"topic": "常规新闻", "description": "快速跳过的内容"},
+			},
+			AttentionGuide:    "用户倾向于关注高价值资讯，对通俗新闻互动较低。",
+			ConcentrationNote: &fallbackNote,
+		}, nil
+	}
+
+	if snapshot.ConcentrationNote != nil && *snapshot.ConcentrationNote != "" {
+		re := regexp.MustCompile(`[\s\n]*[—\-]{2,}[^—\-]+$`)
+		note := re.ReplaceAllString(*snapshot.ConcentrationNote, "")
+		finalNote := strings.TrimSpace(note) + " " + currPersona.Signature
+		snapshot.ConcentrationNote = &finalNote
 	}
 
 	return &snapshot, nil
