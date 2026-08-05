@@ -1225,16 +1225,10 @@ func getInterestProfile(c *gin.Context) {
 		return
 	}
 
-	todayStr := time.Now().Format("2006-01-02")
 	latest, err := crud.GetLatestUserInterest()
-
-	// 只要今天的画像快照尚未生成，就在用户打开查看时【完全被动、无需干预】地自动计算并生成今日最新画像
-	if latest == nil || latest.SnapshotDate != todayStr {
-		if buildErr := services.BuildUserInterestProfile(); buildErr != nil {
-			log.Printf("[Profile] Auto-generating daily interest profile failed: %s", buildErr)
-		} else {
-			latest, _ = crud.GetLatestUserInterest()
-		}
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"detail": err.Error()})
+		return
 	}
 
 	if latest == nil {
