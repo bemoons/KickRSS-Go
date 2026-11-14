@@ -407,7 +407,7 @@ func getUnreadEntries(c *gin.Context) {
 		JOIN feeds f ON f.id = e.feed_id
 		LEFT JOIN categories c ON c.id = e.category_id
 		WHERE %s
-		ORDER BY e.published_at DESC
+		ORDER BY e.published_at DESC, e.id DESC
 		LIMIT ? OFFSET ?
 	`, whereClause)
 

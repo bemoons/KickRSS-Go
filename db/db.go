@@ -62,6 +62,11 @@ CREATE TABLE IF NOT EXISTS entries (
 
 CREATE INDEX IF NOT EXISTS idx_entries_cat ON entries(category_id, is_read);
 CREATE INDEX IF NOT EXISTS idx_entries_feed_unread ON entries(feed_id, is_read);
+CREATE INDEX IF NOT EXISTS idx_entries_feed_read_pub ON entries(feed_id, is_read, published_at DESC, id DESC);
+CREATE INDEX IF NOT EXISTS idx_entries_feed_pub ON entries(feed_id, published_at DESC, id DESC);
+CREATE INDEX IF NOT EXISTS idx_entries_cat_read_pub ON entries(category_id, is_read, published_at DESC, id DESC);
+CREATE INDEX IF NOT EXISTS idx_entries_cat_pub ON entries(category_id, published_at DESC, id DESC);
+CREATE INDEX IF NOT EXISTS idx_entries_unread_pub ON entries(is_read, published_at DESC, id DESC);
 CREATE INDEX IF NOT EXISTS idx_entries_starred ON entries(is_starred);
 CREATE INDEX IF NOT EXISTS idx_entries_fetched_at ON entries(fetched_at);
 
@@ -254,6 +259,21 @@ func migrateDatabase(db *sql.DB) error {
 		return err
 	}
 	if _, err := db.Exec("CREATE INDEX IF NOT EXISTS idx_entries_fetched_at ON entries(fetched_at);"); err != nil {
+		return err
+	}
+	if _, err := db.Exec("CREATE INDEX IF NOT EXISTS idx_entries_feed_read_pub ON entries(feed_id, is_read, published_at DESC, id DESC);"); err != nil {
+		return err
+	}
+	if _, err := db.Exec("CREATE INDEX IF NOT EXISTS idx_entries_feed_pub ON entries(feed_id, published_at DESC, id DESC);"); err != nil {
+		return err
+	}
+	if _, err := db.Exec("CREATE INDEX IF NOT EXISTS idx_entries_cat_read_pub ON entries(category_id, is_read, published_at DESC, id DESC);"); err != nil {
+		return err
+	}
+	if _, err := db.Exec("CREATE INDEX IF NOT EXISTS idx_entries_cat_pub ON entries(category_id, published_at DESC, id DESC);"); err != nil {
+		return err
+	}
+	if _, err := db.Exec("CREATE INDEX IF NOT EXISTS idx_entries_unread_pub ON entries(is_read, published_at DESC, id DESC);"); err != nil {
 		return err
 	}
 	if _, err := db.Exec("CREATE INDEX IF NOT EXISTS idx_chat_messages_entry ON chat_messages(entry_id);"); err != nil {

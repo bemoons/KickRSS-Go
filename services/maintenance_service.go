@@ -456,6 +456,14 @@ func RunAllFeedsMaintenance() (map[int][]map[string]interface{}, error) {
 		log.Println("[Maintenance] Successfully cleaned up old user interests snapshot records.")
 	}
 
+	// 6. Deduplicate raw_content where fulltext exists and compact database (VACUUM)
+	cleanedCount, errCompact := crud.CompactDatabase(true)
+	if errCompact != nil {
+		log.Printf("[Maintenance] Database compaction warning: %s (cleaned %d entries)", errCompact, cleanedCount)
+	} else {
+		log.Printf("[Maintenance] Database compaction finished (cleaned %d redundant entries and vacuumed).", cleanedCount)
+	}
+
 	return report, nil
 }
 

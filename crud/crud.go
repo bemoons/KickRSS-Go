@@ -19,9 +19,9 @@ import (
 func ListFeeds() ([]models.Feed, error) {
 	query := `
 		SELECT f.id, f.title, f.url, f.site_url, f.etag, f.last_modified, f.last_fetched_at, f.seeded, f.enabled, f.need_classification,
-		       COUNT(CASE WHEN e.is_read = 0 THEN 1 END) as unread_count
+		       COUNT(e.id) as unread_count
 		FROM feeds f
-		LEFT JOIN entries e ON e.feed_id = f.id
+		LEFT JOIN entries e ON e.feed_id = f.id AND e.is_read = 0
 		GROUP BY f.id
 		ORDER BY f.title ASC
 	`
@@ -159,9 +159,9 @@ func DeleteFeed(id int) (bool, error) {
 func GetCategoriesForFeed(feedID int) ([]models.Category, error) {
 	query := `
 		SELECT c.id, c.feed_id, c.name, c.is_default, c.created_at,
-		       COUNT(CASE WHEN e.is_read = 0 THEN 1 END) as unread_count
+		       COUNT(e.id) as unread_count
 		FROM categories c
-		LEFT JOIN entries e ON e.category_id = c.id
+		LEFT JOIN entries e ON e.category_id = c.id AND e.is_read = 0
 		WHERE c.feed_id = ?
 		GROUP BY c.id
 		ORDER BY c.is_default DESC, c.name ASC
@@ -288,6 +288,14 @@ func GetEntryByID(id int) (*models.Entry, error) {
 	return &e, nil
 }
 
+func hasEmbeddedVideo(raw string) bool {
+	if raw == "" {
+		return false
+	}
+	lower := strings.ToLower(raw)
+	return strings.Contains(lower, "<video") || strings.Contains(lower, "<iframe")
+}
+
 func SaveEntries(feedID int, rawEntries []models.Entry, defaultCatID int) (int, error) {
 	tx, err := db.DB.Begin()
 	if err != nil {
@@ -337,16 +345,38 @@ func SaveEntries(feedID int, rawEntries []models.Entry, defaultCatID int) (int, 
 				pubTime = now
 			}
 
-			resInsert, err := stmtInsert.Exec(feedID, defaultCatID, re.Guid, re.Title, re.URL, re.Author, pubTime, now, re.RawContent, likelyNoText, fulltextReady)
+			rawToSave := re.RawContent
+			var cleanContent string
+			var ftStatus string
+			if fulltextReady == 1 && likelyNoText == 0 {
+				cleanContent = CleanHTML(re.RawContent)
+				if len([]rune(cleanContent)) >= 200 {
+					ftStatus = "ok"
+					if !hasEmbeddedVideo(re.RawContent) {
+						rawToSave = ""
+					}
+				} else {
+					ftStatus = "no_text"
+					fulltextReady = 0
+				}
+			} else if fulltextReady == 1 && likelyNoText == 1 {
+				if !hasEmbeddedVideo(re.RawContent) {
+					rawToSave = ""
+				}
+			}
+
+			resInsert, err := stmtInsert.Exec(feedID, defaultCatID, re.Guid, re.Title, re.URL, re.Author, pubTime, now, rawToSave, likelyNoText, fulltextReady)
 			if err != nil {
 				return 0, err
 			}
 			newCount++
 
-			if likelyNoText == 1 && fulltextReady == 1 {
-				entryID, errID := resInsert.LastInsertId()
-				if errID == nil {
+			entryID, errID := resInsert.LastInsertId()
+			if errID == nil {
+				if likelyNoText == 1 && fulltextReady == 1 {
 					_, _ = tx.Exec("INSERT INTO fulltext (entry_id, content, status, fetched_at, fetcher) VALUES (?, '此文章主要包含视频/多媒体内容，无正文可提取。请点击标题或右上角链接查看原始视频。', 'video', ?, 'feed')", entryID, now)
+				} else if ftStatus == "ok" && cleanContent != "" {
+					_, _ = tx.Exec("INSERT INTO fulltext (entry_id, content, status, fetched_at, fetcher) VALUES (?, ?, 'ok', ?, 'feed')", entryID, cleanContent, now)
 				}
 			}
 		} else if errCheck == nil {
@@ -358,18 +388,17 @@ func SaveEntries(feedID int, rawEntries []models.Entry, defaultCatID int) (int, 
 				}
 
 				if fulltextReady == 1 {
-					_, _ = tx.Exec("UPDATE entries SET raw_content = ?, fulltext_ready = ?, likely_no_text = 0 WHERE id = ?", re.RawContent, fulltextReady, existingID)
-				} else {
-					_, _ = tx.Exec("UPDATE entries SET raw_content = ?, fulltext_ready = ? WHERE id = ?", re.RawContent, fulltextReady, existingID)
-				}
-
-				// If fulltext is now ready, clean and cache it
-				if fulltextReady == 1 {
 					cleanContent := CleanHTML(re.RawContent)
 					status := "no_text"
-					if len(cleanContent) >= 200 { // minChars default 200
+					if len([]rune(cleanContent)) >= 200 {
 						status = "ok"
 					}
+
+					rawToSave := re.RawContent
+					if status == "ok" && !hasEmbeddedVideo(re.RawContent) {
+						rawToSave = ""
+					}
+					_, _ = tx.Exec("UPDATE entries SET raw_content = ?, fulltext_ready = ?, likely_no_text = 0 WHERE id = ?", rawToSave, fulltextReady, existingID)
 
 					var ftExists int
 					errFt := tx.QueryRow("SELECT entry_id FROM fulltext WHERE entry_id = ?", existingID).Scan(&ftExists)
@@ -386,6 +415,8 @@ func SaveEntries(feedID int, rawEntries []models.Entry, defaultCatID int) (int, 
 							stmtUpdFt.Close()
 						}
 					}
+				} else {
+					_, _ = tx.Exec("UPDATE entries SET raw_content = ?, fulltext_ready = ? WHERE id = ?", re.RawContent, fulltextReady, existingID)
 				}
 			}
 		}
@@ -397,10 +428,11 @@ func SaveEntries(feedID int, rawEntries []models.Entry, defaultCatID int) (int, 
 
 func GetUnclassifiedEntries(feedID int) ([]models.Entry, error) {
 	query := `
-		SELECT id, title, raw_content
-		FROM entries
-		WHERE feed_id = ? AND classified_at IS NULL
-		ORDER BY published_at DESC
+		SELECT e.id, e.title, COALESCE(NULLIF(e.raw_content, ''), ft.content, '') as raw_content
+		FROM entries e
+		LEFT JOIN fulltext ft ON ft.entry_id = e.id
+		WHERE e.feed_id = ? AND e.classified_at IS NULL
+		ORDER BY e.published_at DESC
 		LIMIT 100
 	`
 	rows, err := db.DB.Query(query, feedID)
@@ -625,10 +657,33 @@ func SaveFulltext(entryID int, content, status, fetcher string) error {
 	}
 	
 	// Also mark fulltext_ready in entries (and clear likely_no_text if status is ok)
+	// When fulltext is saved with valid content, clear redundant raw_content (unless it contains embedded video/iframe)
 	if status == "ok" {
-		_, err = db.DB.Exec("UPDATE entries SET fulltext_ready = 1, likely_no_text = 0 WHERE id = ?", entryID)
+		if strings.TrimSpace(content) != "" {
+			_, err = db.DB.Exec(`
+				UPDATE entries
+				SET fulltext_ready = 1,
+				    likely_no_text = 0,
+				    raw_content = CASE
+				        WHEN lower(raw_content) LIKE '%<video%' OR lower(raw_content) LIKE '%<iframe%' THEN raw_content
+				        ELSE ''
+				    END
+				WHERE id = ?
+			`, entryID)
+		} else {
+			_, err = db.DB.Exec("UPDATE entries SET fulltext_ready = 1, likely_no_text = 0 WHERE id = ?", entryID)
+		}
 	} else if status == "video" {
-		_, err = db.DB.Exec("UPDATE entries SET fulltext_ready = 1, likely_no_text = 1 WHERE id = ?", entryID)
+		_, err = db.DB.Exec(`
+			UPDATE entries
+			SET fulltext_ready = 1,
+			    likely_no_text = 1,
+			    raw_content = CASE
+			        WHEN lower(raw_content) LIKE '%<video%' OR lower(raw_content) LIKE '%<iframe%' THEN raw_content
+			        ELSE ''
+			    END
+			WHERE id = ?
+		`, entryID)
 	} else {
 		_, err = db.DB.Exec("UPDATE entries SET fulltext_ready = 0 WHERE id = ?", entryID)
 	}
@@ -1267,8 +1322,8 @@ func SearchEntries(queryStr string, unreadOnly bool, limit, offset int) ([]model
 	var params []interface{}
 	for _, w := range words {
 		likePat := "%" + w + "%"
-		conditions = append(conditions, "(e.title LIKE ? OR e.raw_content LIKE ? OR ft.content LIKE ? OR cm.content LIKE ?)")
-		params = append(params, likePat, likePat, likePat, likePat)
+		conditions = append(conditions, "(e.title LIKE ? OR e.raw_content LIKE ? OR ft.content LIKE ? OR s.content LIKE ? OR s.clickbait_note LIKE ? OR cm.content LIKE ?)")
+		params = append(params, likePat, likePat, likePat, likePat, likePat, likePat)
 	}
 
 	whereClause := strings.Join(conditions, " AND ")
@@ -1284,6 +1339,7 @@ func SearchEntries(queryStr string, unreadOnly bool, limit, offset int) ([]model
 		JOIN feeds f ON f.id = e.feed_id
 		LEFT JOIN categories c ON c.id = e.category_id
 		LEFT JOIN fulltext ft ON ft.entry_id = e.id
+		LEFT JOIN summaries s ON s.entry_id = e.id
 		LEFT JOIN chat_messages cm ON cm.entry_id = e.id
 		WHERE %s
 		ORDER BY e.published_at DESC, e.id DESC
@@ -1299,4 +1355,132 @@ func SearchEntries(queryStr string, unreadOnly bool, limit, offset int) ([]model
 	defer rows.Close()
 
 	return scanEntries(rows)
+}
+
+// CompactDatabase migrates any un-extracted long raw_content into cleaned fulltext,
+// clears duplicate raw_content where fulltext already exists, and runs VACUUM to reclaim disk space.
+func CompactDatabase(forceVacuum bool) (int64, error) {
+	now := time.Now().UTC().Format(time.RFC3339)
+	var totalCleaned int64 = 0
+
+	// Step 1: For historical entries that have long raw_content (> 800 bytes) but no fulltext row yet,
+	// extract cleaned Markdown into fulltext (or strip HTML tags) in batches of 500 so no fulltext is lost.
+	lastID := 0
+	for {
+		rows, err := db.DB.Query(`
+			SELECT e.id, e.raw_content
+			FROM entries e
+			LEFT JOIN fulltext ft ON ft.entry_id = e.id
+			WHERE e.id > ?
+			  AND e.raw_content != ''
+			  AND LENGTH(e.raw_content) > 800
+			  AND (ft.entry_id IS NULL OR ft.content = '')
+			ORDER BY e.id ASC
+			LIMIT 500
+		`, lastID)
+		if err != nil {
+			break
+		}
+
+		type rawItem struct {
+			id  int
+			raw string
+		}
+		var batch []rawItem
+		for rows.Next() {
+			var it rawItem
+			if err := rows.Scan(&it.id, &it.raw); err == nil {
+				batch = append(batch, it)
+				if it.id > lastID {
+					lastID = it.id
+				}
+			}
+		}
+		rows.Close()
+
+		if len(batch) == 0 {
+			break
+		}
+
+		tx, err := db.DB.Begin()
+		if err != nil {
+			break
+		}
+
+		stmtFt, _ := tx.Prepare(`
+			INSERT INTO fulltext (entry_id, content, status, fetched_at, fetcher)
+			VALUES (?, ?, 'ok', ?, 'feed')
+			ON CONFLICT(entry_id) DO UPDATE SET
+				content = excluded.content,
+				status = 'ok',
+				fetched_at = excluded.fetched_at,
+				fetcher = 'feed'
+		`)
+		stmtUpdEntry, _ := tx.Prepare(`UPDATE entries SET raw_content = ?, fulltext_ready = ? WHERE id = ?`)
+
+		for _, it := range batch {
+			clean := CleanHTML(it.raw)
+			keepRaw := hasEmbeddedVideo(it.raw)
+			if len([]rune(clean)) >= 200 {
+				if stmtFt != nil {
+					_, _ = stmtFt.Exec(it.id, clean, now)
+				}
+				rawToKeep := ""
+				if keepRaw {
+					rawToKeep = it.raw
+				}
+				if stmtUpdEntry != nil {
+					_, _ = stmtUpdEntry.Exec(rawToKeep, 1, it.id)
+				}
+				totalCleaned++
+			} else if !keepRaw && len(clean) < len(it.raw) {
+				// Short teaser with heavy HTML tags: keep stripped text in raw_content
+				if stmtUpdEntry != nil {
+					_, _ = stmtUpdEntry.Exec(clean, 0, it.id)
+				}
+				totalCleaned++
+			}
+		}
+
+		if stmtFt != nil {
+			stmtFt.Close()
+		}
+		if stmtUpdEntry != nil {
+			stmtUpdEntry.Close()
+		}
+		_ = tx.Commit()
+	}
+
+	// Step 2: Clear redundant raw_content for all entries that already have non-empty fulltext
+	res, err := db.DB.Exec(`
+		UPDATE entries
+		SET raw_content = ''
+		WHERE raw_content != ''
+		  AND lower(raw_content) NOT LIKE '%<video%'
+		  AND lower(raw_content) NOT LIKE '%<iframe%'
+		  AND EXISTS (
+		      SELECT 1 FROM fulltext ft
+		      WHERE ft.entry_id = entries.id
+		        AND ft.content IS NOT NULL
+		        AND ft.content != ''
+		  )
+	`)
+	if err == nil {
+		affected, _ := res.RowsAffected()
+		totalCleaned += affected
+	}
+
+	// Step 3: Check if VACUUM is needed (if rows were cleaned, freelist is large, or forceVacuum is true)
+	var freelistCount int
+	_ = db.DB.QueryRow("PRAGMA freelist_count;").Scan(&freelistCount)
+
+	if totalCleaned > 0 || freelistCount > 1000 || forceVacuum {
+		_, errVac := db.DB.Exec("VACUUM;")
+		_, _ = db.DB.Exec("PRAGMA wal_checkpoint(TRUNCATE);")
+		if errVac != nil {
+			return totalCleaned, errVac
+		}
+	}
+
+	return totalCleaned, nil
 }

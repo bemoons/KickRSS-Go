@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"kickrss/config"
+	"kickrss/crud"
 	"kickrss/db"
 	"kickrss/routers"
 	"kickrss/scheduler"
@@ -38,6 +39,17 @@ func main() {
 	// 3. Start scheduler
 	scheduler.StartScheduler()
 	defer scheduler.ShutdownScheduler()
+
+	// Run one-time background compaction on startup for existing databases
+	go func() {
+		time.Sleep(3 * time.Second)
+		cleaned, err := crud.CompactDatabase(false)
+		if err != nil {
+			log.Printf("[Startup] Background database compaction warning: %v", err)
+		} else if cleaned > 0 {
+			log.Printf("[Startup] Background database compaction completed: deduplicated %d entries and vacuumed database.", cleaned)
+		}
+	}()
 
 	// 4. Setup Gin HTTP router
 	r := routers.SetupRouter()

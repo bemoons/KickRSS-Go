@@ -653,7 +653,7 @@ func AsyncColdStartFeed(feedID int) {
 		return
 	}
 
-	// Save entries
+	// Ensure default category exists
 	var defaultCatID int
 	err = tx.QueryRow("SELECT id FROM categories WHERE feed_id = ? AND is_default = 1", feedID).Scan(&defaultCatID)
 	if err == sql.ErrNoRows {
@@ -663,47 +663,16 @@ func AsyncColdStartFeed(feedID int) {
 		defaultCatID = int(lastID)
 	}
 
-	newCount := 0
-	nowStr := time.Now().UTC().Format(time.RFC3339)
-
-	stmtCheck, _ := tx.Prepare("SELECT id FROM entries WHERE feed_id = ? AND guid = ?")
-	stmtInsert, _ := tx.Prepare(`
-		INSERT INTO entries (feed_id, category_id, guid, title, url, author, published_at, fetched_at, raw_content, attention, likely_no_text, fulltext_ready)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'skim', ?, ?)
-	`)
-
-	for _, re := range result.Entries {
-		var existingID int
-		errCheck := stmtCheck.QueryRow(feedID, re.Guid).Scan(&existingID)
-		if errCheck == sql.ErrNoRows {
-			likelyNoText := 0
-			if len(re.RawContent) < 200 {
-				likelyNoText = 1
-			}
-			fulltextReady := 0
-			if len(re.RawContent) > 800 {
-				fulltextReady = 1
-			}
-			pubTime := re.PublishedAt
-			if pubTime == "" {
-				pubTime = nowStr
-			}
-
-			_, _ = stmtInsert.Exec(feedID, defaultCatID, re.Guid, re.Title, re.URL, re.Author, pubTime, nowStr, re.RawContent, likelyNoText, fulltextReady)
-			newCount++
-		}
-	}
-	stmtCheck.Close()
-	stmtInsert.Close()
-
-	// Update fetch status
-	nowFetch := time.Now().UTC().Format(time.RFC3339)
-	_, _ = tx.Exec("UPDATE feeds SET etag = ?, last_modified = ?, last_fetched_at = ? WHERE id = ?", result.Etag, result.LastModified, nowFetch, feedID)
-
 	if err = tx.Commit(); err != nil {
 		log.Printf("[FeedService] Cold start transaction commit failed: %s", err)
 		return
 	}
+
+	newCount, err := crud.SaveEntries(feedID, result.Entries, defaultCatID)
+	if err != nil {
+		log.Printf("[FeedService] Cold start SaveEntries failed: %s", err)
+	}
+	_ = crud.UpdateFeedFetchStatus(feedID, result.Etag, result.LastModified)
 
 	log.Printf("[FeedService] Cold start completed. Saved %d entries.", newCount)
 
