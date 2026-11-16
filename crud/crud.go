@@ -1180,6 +1180,100 @@ func GetTopicDetail(topicName string) (*TopicDetail, error) {
 	}, nil
 }
 
+var (
+	reMdImg   = regexp.MustCompile(`!\[[^\]]*\]\(\s*(https?://[^\s\)]+)`)
+	reHtmlImg = regexp.MustCompile(`(?i)<img[^>]+src=["'](https?://[^"']+)["']`)
+	reMdImgRm = regexp.MustCompile(`!\[[^\]]*\]\([^\)]*\)`)
+	reMdLink  = regexp.MustCompile(`\[([^\]]+)\]\([^\)]+\)`)
+)
+
+func EnrichEntriesWithPreview(entries []models.Entry) []models.Entry {
+	if len(entries) == 0 {
+		return entries
+	}
+
+	placeholders := make([]string, len(entries))
+	args := make([]interface{}, len(entries))
+	idxMap := make(map[int][]int, len(entries))
+
+	for i, e := range entries {
+		placeholders[i] = "?"
+		args[i] = e.ID
+		idxMap[e.ID] = append(idxMap[e.ID], i)
+	}
+
+	query := fmt.Sprintf(`
+		SELECT e.id,
+		       COALESCE(NULLIF(ft.content, ''), e.raw_content, ''),
+		       COALESCE(s.content, ''),
+		       COALESCE(s.clickbait_note, '')
+		FROM entries e
+		LEFT JOIN fulltext ft ON ft.entry_id = e.id
+		LEFT JOIN summaries s ON s.entry_id = e.id
+		WHERE e.id IN (%s)
+	`, strings.Join(placeholders, ","))
+
+	rows, err := db.DB.Query(query, args...)
+	if err != nil {
+		return entries
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var id int
+		var bodyText, summaryContent, clickbaitNote string
+		if err := rows.Scan(&id, &bodyText, &summaryContent, &clickbaitNote); err != nil {
+			continue
+		}
+
+		indices, ok := idxMap[id]
+		if !ok {
+			continue
+		}
+
+		// Extract first image URL as cover_image
+		coverImg := ""
+		if m := reMdImg.FindStringSubmatch(bodyText); len(m) > 1 {
+			coverImg = strings.TrimSpace(m[1])
+		} else if m := reHtmlImg.FindStringSubmatch(bodyText); len(m) > 1 {
+			coverImg = strings.TrimSpace(m[1])
+		}
+
+		// Clean body text for snippet and character count
+		cleanText := bodyText
+		if strings.Contains(cleanText, "<") && strings.Contains(cleanText, ">") {
+			cleanText = CleanHTML(cleanText)
+			if coverImg == "" {
+				if m := reMdImg.FindStringSubmatch(cleanText); len(m) > 1 {
+					coverImg = strings.TrimSpace(m[1])
+				}
+			}
+		}
+
+		// Strip markdown image tags and simplify links for clean snippet preview
+		cleanText = reMdImgRm.ReplaceAllString(cleanText, "")
+		cleanText = reMdLink.ReplaceAllString(cleanText, "$1")
+		cleanText = strings.TrimSpace(cleanText)
+
+		runes := []rune(cleanText)
+		charCount := len(runes)
+		snippet := cleanText
+		if charCount > 420 {
+			snippet = string(runes[:420]) + "…"
+		}
+
+		for _, idx := range indices {
+			entries[idx].CoverImage = coverImg
+			entries[idx].Snippet = snippet
+			entries[idx].CleanCharCount = charCount
+			entries[idx].SummaryContent = summaryContent
+			entries[idx].ClickbaitNote = clickbaitNote
+		}
+	}
+
+	return entries
+}
+
 func scanEntries(rows *sql.Rows) ([]models.Entry, error) {
 	entries := []models.Entry{}
 	for rows.Next() {
@@ -1207,7 +1301,7 @@ func scanEntries(rows *sql.Rows) ([]models.Entry, error) {
 
 		entries = append(entries, e)
 	}
-	return entries, nil
+	return EnrichEntriesWithPreview(entries), nil
 }
 
 func GetEntriesForCategory(categoryID int, unreadOnly bool, limit, offset int) ([]models.Entry, error) {

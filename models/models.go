@@ -48,8 +48,13 @@ type Entry struct {
 	StarredAt     string `json:"starred_at" db:"starred_at"`
 	
 	// Virtual fields for frontend
-	FeedTitle    string `json:"feed_title,omitempty"`
-	CategoryName string `json:"category_name,omitempty"`
+	FeedTitle      string `json:"feed_title,omitempty"`
+	CategoryName   string `json:"category_name,omitempty"`
+	CoverImage     string `json:"cover_image,omitempty"`
+	Snippet        string `json:"snippet,omitempty"`
+	CleanCharCount int    `json:"clean_char_count,omitempty"`
+	SummaryContent string `json:"summary_content,omitempty"`
+	ClickbaitNote  string `json:"clickbait_note,omitempty"`
 }
 
 type Fulltext struct {

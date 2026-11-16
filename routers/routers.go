@@ -448,7 +448,7 @@ func getUnreadEntries(c *gin.Context) {
 		entries = append(entries, e)
 	}
 
-	c.JSON(http.StatusOK, entries)
+	c.JSON(http.StatusOK, crud.EnrichEntriesWithPreview(entries))
 }
 
 func getStarredEntries(c *gin.Context) {
@@ -505,7 +505,7 @@ func getStarredEntries(c *gin.Context) {
 		entries = append(entries, e)
 	}
 
-	c.JSON(http.StatusOK, entries)
+	c.JSON(http.StatusOK, crud.EnrichEntriesWithPreview(entries))
 }
 
 func getStarredEntriesCount(c *gin.Context) {
@@ -2018,7 +2018,7 @@ func getNotesEntries(c *gin.Context) {
 		entries = append(entries, e)
 	}
 
-	c.JSON(http.StatusOK, entries)
+	c.JSON(http.StatusOK, crud.EnrichEntriesWithPreview(entries))
 }
 
 func getNotesEntriesCount(c *gin.Context) {
