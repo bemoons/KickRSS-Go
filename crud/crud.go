@@ -4,6 +4,8 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"regexp"
 	"strings"
 	"time"
@@ -285,7 +287,91 @@ func GetEntryByID(id int) (*models.Entry, error) {
 	e.ClassifiedAt = classifiedAt.String
 	e.StarredAt = starredAt.String
 
+	if e.LikelyNoText == 1 && !hasEmbeddedVideo(e.RawContent) && e.URL != "" {
+		e.RawContent = EnsureVideoEmbeddedForEntry(e.ID, e.URL, e.RawContent)
+	}
+
 	return &e, nil
+}
+
+var (
+	reVideo720p  = regexp.MustCompile(`https?://[^"'\s<>\\]+/mp4720p/[^"'\s<>\\]+\.mp4`)
+	reVideoMp4   = regexp.MustCompile(`https?://[^"'\s<>\\]+\.mp4`)
+	reHuxiuCover = regexp.MustCompile(`https?://img\.huxiucdn\.com/article/cover/[^"'\s<>\\]+`)
+	reOgImage    = regexp.MustCompile(`(?i)<meta[^>]+property=["']og:image["'][^>]+content=["'](https?://[^"']+)["']`)
+	reVideoPoster = regexp.MustCompile(`(?i)<video[^>]+poster=["'](https?://[^"']+)["']`)
+)
+
+func ExtractWebpageVideo(pageURL string) (string, string) {
+	if pageURL == "" {
+		return "", ""
+	}
+	client := &http.Client{Timeout: 6 * time.Second}
+	req, err := http.NewRequest("GET", pageURL, nil)
+	if err != nil {
+		return "", ""
+	}
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36")
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", ""
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", ""
+	}
+
+	bodyBytes, err := io.ReadAll(io.LimitReader(resp.Body, 2*1024*1024))
+	if err != nil {
+		return "", ""
+	}
+	htmlStr := strings.ReplaceAll(string(bodyBytes), `\u002F`, `/`)
+	htmlStr = strings.ReplaceAll(htmlStr, `\/`, `/`)
+
+	videoURL := reVideo720p.FindString(htmlStr)
+	if videoURL == "" {
+		videoURL = reVideoMp4.FindString(htmlStr)
+	}
+
+	posterURL := reHuxiuCover.FindString(htmlStr)
+	if posterURL == "" {
+		if m := reOgImage.FindStringSubmatch(htmlStr); len(m) > 1 {
+			posterURL = m[1]
+		}
+	}
+	return videoURL, posterURL
+}
+
+func EnsureVideoEmbeddedForEntry(entryID int, entryURL, rawContent string) string {
+	if hasEmbeddedVideo(rawContent) || entryURL == "" {
+		return rawContent
+	}
+	lowerURL := strings.ToLower(entryURL)
+	// Skip URLs already handled by direct URL player (YouTube/Bilibili/Vimeo)
+	if strings.Contains(lowerURL, "bilibili.com") || strings.Contains(lowerURL, "youtube.com") || strings.Contains(lowerURL, "youtu.be") || strings.Contains(lowerURL, "vimeo.com") {
+		return rawContent
+	}
+
+	videoURL, posterURL := ExtractWebpageVideo(entryURL)
+	if videoURL == "" {
+		return rawContent
+	}
+
+	var videoTag string
+	if posterURL != "" {
+		videoTag = fmt.Sprintf(`<video src="%s" poster="%s" controls playsinline preload="metadata"></video>`, videoURL, posterURL)
+	} else {
+		videoTag = fmt.Sprintf(`<video src="%s" controls playsinline preload="metadata"></video>`, videoURL)
+	}
+
+	updatedRaw := videoTag
+	if strings.TrimSpace(rawContent) != "" {
+		updatedRaw = videoTag + "\n" + rawContent
+	}
+	if entryID > 0 {
+		_, _ = db.DB.Exec("UPDATE entries SET raw_content = ? WHERE id = ?", updatedRaw, entryID)
+	}
+	return updatedRaw
 }
 
 func hasEmbeddedVideo(raw string) bool {
@@ -358,10 +444,6 @@ func SaveEntries(feedID int, rawEntries []models.Entry, defaultCatID int) (int, 
 				} else {
 					ftStatus = "no_text"
 					fulltextReady = 0
-				}
-			} else if fulltextReady == 1 && likelyNoText == 1 {
-				if !hasEmbeddedVideo(re.RawContent) {
-					rawToSave = ""
 				}
 			}
 
@@ -1205,6 +1287,8 @@ func EnrichEntriesWithPreview(entries []models.Entry) []models.Entry {
 	query := fmt.Sprintf(`
 		SELECT e.id,
 		       COALESCE(NULLIF(ft.content, ''), e.raw_content, ''),
+		       COALESCE(ft.status, ''),
+		       COALESCE(e.raw_content, ''),
 		       COALESCE(s.content, ''),
 		       COALESCE(s.clickbait_note, '')
 		FROM entries e
@@ -1219,33 +1303,62 @@ func EnrichEntriesWithPreview(entries []models.Entry) []models.Entry {
 	}
 	defer rows.Close()
 
+	type rowMeta struct {
+		id             int
+		bodyText       string
+		ftStatus       string
+		rawContent     string
+		summaryContent string
+		clickbaitNote  string
+	}
+	var metas []rowMeta
 	for rows.Next() {
-		var id int
-		var bodyText, summaryContent, clickbaitNote string
-		if err := rows.Scan(&id, &bodyText, &summaryContent, &clickbaitNote); err != nil {
+		var m rowMeta
+		if err := rows.Scan(&m.id, &m.bodyText, &m.ftStatus, &m.rawContent, &m.summaryContent, &m.clickbaitNote); err != nil {
 			continue
 		}
+		metas = append(metas, m)
+	}
+	rows.Close()
 
-		indices, ok := idxMap[id]
-		if !ok {
+	resolvedVideos := 0
+	for _, m := range metas {
+		indices, ok := idxMap[m.id]
+		if !ok || len(indices) == 0 {
 			continue
+		}
+		firstEntry := entries[indices[0]]
+		rawContent := m.rawContent
+
+		// Automatically resolve webpage video URL for up to 4 un-cached video entries per request
+		if (firstEntry.LikelyNoText == 1 || m.ftStatus == "video") && !hasEmbeddedVideo(rawContent) && resolvedVideos < 4 {
+			resolvedVideos++
+			rawContent = EnsureVideoEmbeddedForEntry(m.id, firstEntry.URL, rawContent)
 		}
 
 		// Extract first image URL as cover_image
 		coverImg := ""
-		if m := reMdImg.FindStringSubmatch(bodyText); len(m) > 1 {
-			coverImg = strings.TrimSpace(m[1])
-		} else if m := reHtmlImg.FindStringSubmatch(bodyText); len(m) > 1 {
-			coverImg = strings.TrimSpace(m[1])
+		if pm := reVideoPoster.FindStringSubmatch(rawContent); len(pm) > 1 {
+			coverImg = strings.TrimSpace(pm[1])
+		} else if im := reMdImg.FindStringSubmatch(m.bodyText); len(im) > 1 {
+			coverImg = strings.TrimSpace(im[1])
+		} else if im := reHtmlImg.FindStringSubmatch(m.bodyText); len(im) > 1 {
+			coverImg = strings.TrimSpace(im[1])
+		}
+
+		// For video entries, prefer the real video intro text from rawContent over the generic static notice
+		sourceForSnippet := m.bodyText
+		if (firstEntry.LikelyNoText == 1 || m.ftStatus == "video") && strings.TrimSpace(rawContent) != "" {
+			sourceForSnippet = rawContent
 		}
 
 		// Clean body text for snippet and character count
-		cleanText := bodyText
+		cleanText := sourceForSnippet
 		if strings.Contains(cleanText, "<") && strings.Contains(cleanText, ">") {
 			cleanText = CleanHTML(cleanText)
 			if coverImg == "" {
-				if m := reMdImg.FindStringSubmatch(cleanText); len(m) > 1 {
-					coverImg = strings.TrimSpace(m[1])
+				if im := reMdImg.FindStringSubmatch(cleanText); len(im) > 1 {
+					coverImg = strings.TrimSpace(im[1])
 				}
 			}
 		}
@@ -1263,11 +1376,14 @@ func EnrichEntriesWithPreview(entries []models.Entry) []models.Entry {
 		}
 
 		for _, idx := range indices {
+			if hasEmbeddedVideo(rawContent) {
+				entries[idx].RawContent = rawContent
+			}
 			entries[idx].CoverImage = coverImg
 			entries[idx].Snippet = snippet
 			entries[idx].CleanCharCount = charCount
-			entries[idx].SummaryContent = summaryContent
-			entries[idx].ClickbaitNote = clickbaitNote
+			entries[idx].SummaryContent = m.summaryContent
+			entries[idx].ClickbaitNote = m.clickbaitNote
 		}
 	}
 

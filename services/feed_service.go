@@ -441,12 +441,16 @@ func FetchFeed(url string, etag, lastModified string) (*FetchResult, error) {
 		}
 
 		isTypeVideo := false
+		rssThumbnail := ""
 		if extensions, ok := item.Extensions[""]; ok {
 			if typeExtensions, ok := extensions["type"]; ok && len(typeExtensions) > 0 {
 				typeVal := typeExtensions[0].Value
 				if typeVal == "video_article" || typeVal == "video" {
 					isTypeVideo = true
 				}
+			}
+			if thumbExtensions, ok := extensions["thumbnail"]; ok && len(thumbExtensions) > 0 {
+				rssThumbnail = strings.TrimSpace(thumbExtensions[0].Value)
 			}
 		}
 
@@ -455,6 +459,21 @@ func FetchFeed(url string, etag, lastModified string) (*FetchResult, error) {
 		if isTypeVideo {
 			likelyNoText = 1
 			fulltextReady = 1
+			if !strings.Contains(strings.ToLower(content), "<video") && item.Link != "" {
+				videoURL, posterURL := crud.ExtractWebpageVideo(item.Link)
+				if posterURL == "" {
+					posterURL = rssThumbnail
+				}
+				if videoURL != "" {
+					var videoTag string
+					if posterURL != "" {
+						videoTag = fmt.Sprintf(`<video src="%s" poster="%s" controls playsinline preload="metadata"></video>`, videoURL, posterURL)
+					} else {
+						videoTag = fmt.Sprintf(`<video src="%s" controls playsinline preload="metadata"></video>`, videoURL)
+					}
+					content = videoTag + "\n" + content
+				}
+			}
 		}
 
 		entries = append(entries, models.Entry{
